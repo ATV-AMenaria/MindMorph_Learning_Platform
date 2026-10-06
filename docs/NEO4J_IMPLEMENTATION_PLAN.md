@@ -68,19 +68,19 @@ This document outlines the step-by-step plan to integrate Neo4j into MindMorph a
 - [x] Modify `start_session()` to use `topic_graph_exists()` and `read_skill_graph()` from Neo4j as the primary cache check, falling back to Postgres if needed.
 
 ### Step 3.2: LangGraph Checkpointer Integration
-- [ ] Import and wire up the official LangGraph Neo4j checkpointer (from `langchain-neo4j`) into the `StateGraph` compilation step in `graph/learning_plan_graph.py`.
-- [ ] This replaces the default in-memory or Postgres checkpointer, making pipeline execution fully traceable in Neo4j.
+- [x] Import and wire up the official LangGraph Neo4j checkpointer (from `langchain-neo4j`) into the `StateGraph` compilation step in `graph/learning_plan_graph.py`.
+- [x] This replaces the default in-memory or Postgres checkpointer, making pipeline execution fully traceable in Neo4j.
 
 ### Step 3.3: Replace Python DFS with Cypher
-- [ ] In `graph/skill_graph_adapt.py`, replace the Python-based `_reaches()` depth-first search function with a native Cypher path query:
+- [x] In `graph/skill_graph_adapt.py`, replace the Python-based `_reaches()` depth-first search function with a native Cypher path query:
   `MATCH path = (a:Skill {id: $start})-[:PREREQUISITE*]->(b:Skill {id: $target})`
-- [ ] Replace `prune_dangling_edges()` with a Cypher query that automatically deletes orphaned relationships.
-- [ ] Update `services/completion.py` to use Cypher to compute available, locked, and in-progress nodes directly.
+- [x] Replace `prune_dangling_edges()` with a Cypher query that automatically deletes orphaned relationships.
+- [x] Update `services/completion.py` to use Cypher to compute available, locked, and in-progress nodes directly.
 
 ### Step 3.4: Migrate User Progress
-- [ ] Transition mastery state out of the JSONB blob.
-- [ ] Model user progress in Neo4j using `(:Session)` nodes and `(:Progress)` nodes linked to the shared `(:Skill)` nodes.
-- [ ] Refactor `services/mastery.py` to update mastery scores via Cypher `SET` commands on the `(:Progress)` nodes instead of rewriting the entire JSONB session.
+- [x] Transition mastery state out of the JSONB blob.
+- [x] Model user progress in Neo4j using `(:Session)` nodes and `(:Progress)` nodes linked to the shared `(:Skill)` nodes.
+- [x] Refactor `services/mastery.py` to update mastery scores via Cypher `SET` commands on the `(:Progress)` nodes instead of rewriting the entire JSONB session.
 
 ---
 
@@ -89,13 +89,13 @@ This document outlines the step-by-step plan to integrate Neo4j into MindMorph a
 **Goal:** Ensure the system behaves as expected during integrations.
 
 ### Step 4.1: Integration Tests ("Dragon Test")
-- [ ] Write integration tests to verify the cache hit correctly short-circuits the pipeline.
-- [ ] Write tests verifying that querying the same topic twice does not invoke the LLM agents.
-- [ ] Verify that invalid or noisy queries (e.g., "Python! " vs "python") map to the same canonical cache key.
+- [x] Write integration tests to verify the cache hit correctly short-circuits the pipeline.
+- [x] Write tests verifying that querying the same topic twice does not invoke the LLM agents.
+- [x] Verify that invalid or noisy queries (e.g., "Python! " vs "python") map to the same canonical cache key.
 
 ### Step 4.2: Graphics / Visual Verification
-- [ ] Ensure that the Mermaid graph rendered in the frontend (`SkillGraph` display) continues to function perfectly when reading from the Neo4j backend.
-- [ ] Compare the frontend visualization from a cache-hit (Neo4j read) vs a fresh generation to ensure no edge or node properties are lost in translation.
+- [x] Ensure that the Mermaid graph rendered in the frontend (`SkillGraph` display) continues to function perfectly when reading from the Neo4j backend.
+- [x] Compare the frontend visualization from a cache-hit (Neo4j read) vs a fresh generation to ensure no edge or node properties are lost in translation.
 
 ---
 

@@ -83,8 +83,9 @@ through the editor above.
   `langchain-mcp-adapters`, with an explicit timeout wrapper in `tools/mcp_timeout.py` — a hung tool call
   can't stall a graph.
 - **Postgres is the system of record when durability is on.** SQLAlchemy 2 models under `persistence/`,
-  migrations via Alembic, FastAPI routes in `api/`. For local dev, `MINDMORPH_STORE=memory` skips all of
-  that and keeps sessions in memory for the process lifetime.
+  migrations via Alembic, FastAPI routes in `api/`.
+- **Neo4j Graph Architecture (Phase 3 Completed).** The core backend heavily relies on Neo4j for caching complex topics, tracking session mastery, and tracing AI thoughts. Read `docs/NEO4J_ARCHITECTURE.md` to learn how the Cypher Completion Engine computes adaptive learning paths.
+  For local dev, `MINDMORPH_STORE=memory` skips all of that and keeps sessions in memory for the process lifetime.
 
 ## Run it in two minutes
 
@@ -146,6 +147,7 @@ the headroom. Keep the model on the OpenAI OSS family; Groq has deprecated its L
 | `MINDMORPH_OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint |
 | `MINDMORPH_STORE` | `postgres` | Set to `memory` for zero-infra dev (as the quickstart does); the unset default is the durable Postgres store |
 | `DATABASE_URL` | `postgresql+psycopg://mindmorph:mindmorph@localhost:5432/mindmorph` | Matches `docker-compose.yml`, used when `MINDMORPH_STORE=postgres` |
+| `NEO4J_URI` | `bolt://localhost:7687` | Connection string for Neo4j Graph DB |
 | `MINDMORPH_RAG` | off | Toggles knowledge-base retrieval grounding |
 | `MINDMORPH_KNOWLEDGE_DIR` | `knowledge_base/` | Corpus loaded into the vector store at startup |
 | `NEXT_PUBLIC_JUPYTERLITE_URL` | hosted JupyterLite demo | Overrides the in-lesson scratchpad REPL |

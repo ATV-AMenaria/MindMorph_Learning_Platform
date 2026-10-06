@@ -75,3 +75,75 @@ def read_skill_graph(canonical: str) -> Optional[dict]:
             for r in edges_res
         ]
     return {"nodes": nodes, "edges": edges}
+
+
+def write_session_progress(session_id: str, node_state: dict):
+    """Write the full node_state dict for a session into Neo4j."""
+    from persistence.neo4j_db import get_driver
+    try:
+        with get_driver().session() as session:
+            session.run(
+                "MERGE (s:Session {id: $session_id}) "
+                "WITH s "
+                "UNWIND $states AS st "
+                "MERGE (p:Progress {session_id: $session_id, node_id: st.id}) "
+                "MERGE (s)-[:HAS_PROGRESS]->(p) "
+                "WITH p, st "
+                "MATCH (skill:Skill {id: st.id}) "
+                "MERGE (p)-[:FOR_SKILL]->(skill) "
+                "SET p.status = st.status, "
+                "    p.remediation_pending = coalesce(st.remediation_pending, false)",
+                session_id=session_id,
+                states=[{"id": nid, **state} for nid, state in node_state.items()]
+            )
+    except Exception as e:
+        logger.error(f"Failed to write session progress to Neo4j: {e}")
+
+
+def get_completed_and_locked_nodes(session_id: str) -> tuple[set, set]:
+    """Execute Cypher to determine completed and locked nodes for a session.
+    A node is completed if it is mastered AND all its prerequisites are mastered.
+    A node is locked if any prerequisite is incomplete, OR if it has a pending remediation
+    and its remedial prerequisites are not yet completed."""
+    from persistence.neo4j_db import get_driver
+    try:
+        with get_driver().session() as session:
+            # Cypher for completed nodes
+            completed = session.run(
+                """
+                MATCH (s:Session {id: $session_id})-[:HAS_PROGRESS]->(p:Progress)-[:FOR_SKILL]->(n:Skill)
+                WHERE p.status = 'mastered'
+                OPTIONAL MATCH (unmastered_p:Progress)-[:FOR_SKILL]->(unmastered:Skill)-[:PREREQUISITE*1..]->(n)
+                WHERE unmastered_p.session_id = $session_id AND unmastered_p.status <> 'mastered'
+                WITH n, count(unmastered) AS incomplete_prereqs
+                WHERE incomplete_prereqs = 0
+                RETURN n.id AS id
+                """,
+                session_id=session_id
+            )
+            completed_ids = {record["id"] for record in completed}
+            
+            # Cypher for locked nodes
+            locked = session.run(
+                """
+                MATCH (s:Session {id: $session_id})-[:HAS_PROGRESS]->(p:Progress)-[:FOR_SKILL]->(n:Skill)
+                OPTIONAL MATCH (unmastered_p:Progress)-[:FOR_SKILL]->(unmastered:Skill)-[:PREREQUISITE*1..]->(n)
+                WHERE unmastered_p.session_id = $session_id AND unmastered_p.status <> 'mastered'
+                
+                OPTIONAL MATCH (p)-[:FOR_SKILL]->(n)<-[:PREREQUISITE]-(direct_prereq:Skill)<-[:FOR_SKILL]-(dp:Progress {session_id: $session_id})
+                
+                WITH n, p, count(unmastered) AS incomplete_prereqs, collect(dp.status) AS direct_prereq_statuses
+                
+                WHERE incomplete_prereqs > 0 
+                   OR (p.remediation_pending = true AND (size(direct_prereq_statuses) = 0 OR any(status IN direct_prereq_statuses WHERE status <> 'mastered')))
+                
+                RETURN n.id AS id
+                """,
+                session_id=session_id
+            )
+            locked_ids = {record["id"] for record in locked}
+            
+            return completed_ids, locked_ids
+    except Exception as e:
+        logger.error(f"Failed to query completion status from Neo4j: {e}")
+        return set(), set()

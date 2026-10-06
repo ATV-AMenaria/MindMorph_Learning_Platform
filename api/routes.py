@@ -73,6 +73,7 @@ def create_session(req: CreateSessionRequest) -> StartSessionResponse:
     ls = result.get("learning_session")
     if ls is not None:
         session_id = uuid.uuid4().hex
+        ls["session_id"] = session_id
         get_default_repository().save(req.user_id, session_id, ls, title=req.query)
         resp.session_id = session_id
         resp.learning_session = ls
@@ -99,6 +100,7 @@ async def create_session_stream(req: CreateSessionRequest) -> StreamingResponse:
                 ls = result.get("learning_session")
                 if ls is not None:
                     session_id = uuid.uuid4().hex
+                    ls["session_id"] = session_id
                     get_default_repository().save(req.user_id, session_id, ls, title=req.query)
                     resp.session_id = session_id
                     resp.learning_session = ls

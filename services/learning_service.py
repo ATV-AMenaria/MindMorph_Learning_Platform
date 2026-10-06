@@ -107,8 +107,8 @@ def _save_graph_to_cache(canonical: str, query_text: str, skill_graph: dict) -> 
     try:
         from persistence.neo4j_graph import write_skill_graph
         write_skill_graph(canonical, skill_graph)
-    except Exception:
-        pass # neo4j write failed (non-fatal — Postgres cache still saved)
+    except Exception as e:
+        logger.error(f"neo4j write failed: {e}", exc_info=True)
 
 # --- Lazy per-process graph/agent singletons --------------------------------------------------
 _orchestration_graph = None
@@ -226,6 +226,7 @@ def new_learning_session(final_state: dict, format_type: str) -> Optional[dict]:
         "chat": [],  # AI Teaching Assistant turns (P3 #10): list of {role, content}
         "usage": _empty_usage(),  # cost/cache accounting (unit-economics)
         "events": [],  # funnel timeline (Gate-1 observability)
+        "canonical": final_state.get("canonical_topic") or _normalize_query(skill_graph.get("summary") or ""),
     }
     record_event(ls, STAGES.SESSION_CREATED,
                  node_count=len(skill_graph["nodes"]), format_type=format_type)
@@ -304,6 +305,7 @@ def start_session(user_query: str, format_type: str = "B") -> dict:
         final_state = _run_async(
             _get_orchestration_graph().ainvoke({"user_query": user_query, "format_type": format_type})
         )
+    final_state["canonical_topic"] = canonical
     result = _route_final_state(final_state, format_type, spans_payload(spans))
 
     # ── Save the new graph to cache after pipeline completes ──────────────────
@@ -335,7 +337,7 @@ async def astream_session(user_query: str, format_type: str = "B"):
     # ── Cache check: return immediately if graph already built ────────────────
     cached_graph = _get_graph_from_cache(canonical)
     if cached_graph:
-        ls = new_learning_session({"skill_graph": cached_graph}, format_type)
+        ls = new_learning_session({"skill_graph": cached_graph, "canonical_topic": canonical}, format_type)
         if ls:
             ls["usage"]["cache_hits"] = 1
             yield {"stage": "cache", "label": "Loading from cache"}
@@ -352,6 +354,7 @@ async def astream_session(user_query: str, format_type: str = "B"):
                 final_state.update(node_output or {})
                 yield {"stage": node_name, "label": STAGE_LABELS.get(node_name, node_name)}
     
+    final_state["canonical_topic"] = canonical
     result = _route_final_state(final_state, format_type, spans_payload(spans))
 
     # ── Save the new graph to cache after pipeline completes ──────────────────
@@ -504,6 +507,10 @@ def adapt_after_grade(ls: dict, node_id: str) -> list[str]:
     ls["skill_graph"] = new_graph
     for nid in new_ids:
         ls["node_state"].setdefault(nid, default_node_state())
+        
+    if new_ids or adaptation.new_edges:
+        canonical = ls.get("canonical") or _normalize_query(ls.get("summary") or "")
+        _save_graph_to_cache(canonical, ls.get("summary") or "", new_graph)
 
     focus = list(adaptation.remediation_focus or [])
     if focus:

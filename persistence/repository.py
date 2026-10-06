@@ -78,6 +78,13 @@ class PostgresLearningSessionRepository(LearningSessionRepository):
             session.execute(stmt)
             session.commit()
         logger.info("persistence: saved session %s/%s", user_id, session_id)
+        
+        # Phase 3.4: Sync progress to Neo4j
+        try:
+            from persistence.neo4j_graph import write_session_progress
+            write_session_progress(session_id, ls.get("node_state", {}))
+        except Exception:
+            pass
 
     def list_sessions(self, user_id: str) -> list[dict]:
         from sqlalchemy import select
@@ -152,6 +159,13 @@ class InMemoryLearningSessionRepository(LearningSessionRepository):
             "title": kept_title,
             "updated_at": datetime.now(timezone.utc),
         }
+        
+        # Phase 3.4: Sync progress to Neo4j
+        try:
+            from persistence.neo4j_graph import write_session_progress
+            write_session_progress(session_id, ls.get("node_state", {}))
+        except Exception:
+            pass
 
     def list_sessions(self, user_id: str) -> list[dict]:
         rows = [
