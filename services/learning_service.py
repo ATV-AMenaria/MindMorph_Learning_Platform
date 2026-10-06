@@ -317,6 +317,7 @@ def open_lesson(ls: dict, node_id: str, user_id: Optional[str] = None) -> dict:
             "content": out.get("content"),
             "exercise": {
                 "format": out.get("exercise_format"),
+                "language": out.get("exercise_language"),
                 "statement": out.get("exercise_statement"),
                 "grading_artifact": out.get("grading_artifact"),
             },

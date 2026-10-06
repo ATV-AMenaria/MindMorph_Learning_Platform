@@ -50,6 +50,7 @@ export function LessonPanel({
   if (!lesson) return null;
   const exercise = lesson.exercise;
   const isCoding = (exercise?.format ?? "coding_challenge") === "coding_challenge";
+  const exerciseLanguage = exercise?.language ?? exercise?.grading_artifact?.language ?? "python";
   const lastFeedback = session.node_state[nodeId]?.last_feedback ?? null;
   // Already flagged? Derived from the funnel timeline so it persists across reloads.
   const flagged = (session.events ?? []).some(
@@ -111,7 +112,7 @@ export function LessonPanel({
 
           <div className="mt-6">
             {isCoding ? (
-              <CodeEditor value={solution} onChange={setSolution} />
+              <CodeEditor value={solution} onChange={setSolution} language={exerciseLanguage} />
             ) : (
               <textarea
                 value={solution}

@@ -25,6 +25,7 @@ from agents.exercise.grading_schema import GradingArtifact, RubricScore
 
 _HUMAN_TEMPLATE = """Learner goal: {user_query}
 Exercise format: {exercise_format}
+Coding language: {exercise_language}
 
 EXERCISE:
 {exercise_statement}
@@ -47,16 +48,20 @@ class GraderAgent:
         user_query: str,
         exercise_format: str,
         exercise_statement: str,
+        exercise_language: Optional[str] = None,
     ) -> Optional[GradingArtifact]:
         """Returns a GradingArtifact, or None on failure."""
         if not exercise_statement or not isinstance(exercise_statement, str):
             raise ValueError("exercise_statement must be a non-empty string")
 
-        logger.info("Grader: building grading harness (%s)", exercise_format)
+        # Default to python for backward compatibility with existing callers.
+        language = exercise_language or "python"
+        logger.info("Grader: building grading harness (%s, language=%s)", exercise_format, language)
         messages = self.chat_prompt.format_messages(
             user_query=user_query,
             exercise_format=exercise_format,
             exercise_statement=exercise_statement,
+            exercise_language=language,
         )
         # One retry: a test module that cannot run is worse than no tests at all, because grading it
         # produces a confident wrong score. Validate before handing it to the learner.
@@ -68,18 +73,24 @@ class GraderAgent:
                 return None
             if artifact is None or artifact.format != "coding_challenge":
                 return artifact  # case_study has no tests to validate
-            reason = self._validate_unit_tests(artifact.unit_tests)
+            reason = self._validate_tests(artifact, language)
             if reason is None:
                 return artifact
             logger.error("Grader: generated tests are unrunnable (attempt %d/2): %s", attempt, reason)
         return None
 
     @staticmethod
-    def _validate_unit_tests(unit_tests) -> Optional[str]:
-        """Reason the generated tests can never run, or None. Lazy import: see grade_submission."""
-        from tools.code_executor import check_test_artifact
-
-        return check_test_artifact(unit_tests)
+    def _validate_tests(artifact: GradingArtifact, language: str) -> Optional[str]:
+        """Reason the generated tests can never run, or None. Routes to the right validator."""
+        if language == "javascript":
+            from tools.code_executor import check_test_artifact_js
+            return check_test_artifact_js(artifact.unit_tests)
+        elif language == "sql":
+            from tools.code_executor import check_test_artifact_sql
+            return check_test_artifact_sql(artifact.sql_assertions)
+        else:
+            from tools.code_executor import check_test_artifact
+            return check_test_artifact(artifact.unit_tests)
 
 
 # --- Phase B: live grading of a submitted solution ---------------------------------------------
@@ -107,22 +118,39 @@ def grade_submission(exercise_format: str, solution_text: str, grading_artifact:
         return None
 
     artifact = grading_artifact or {}
-    logger.info("Grader: grading %s submission (%d chars)", exercise_format, len(solution_text))
+    language = artifact.get("language") or "python"
+    logger.info("Grader: grading %s submission (%d chars, language=%s)",
+                exercise_format, len(solution_text), language)
     if exercise_format == "coding_challenge":
-        # Lazy import keeps the code-execution surface out of the module-import path.
-        from tools.code_executor import execute_tests
-
-        # Join with "\n" (not "\n\n"): the grader sometimes returns the test module split into
-        # per-line fragments; a single newline reconstructs it faithfully (indentation preserved).
-        tests = artifact.get("unit_tests") or []
-        result = execute_tests(solution_text, "\n".join(tests))
-        logger.info(
-            "Grader: coding result %s/%s passed (score=%s)",
-            (result or {}).get("passed"), (result or {}).get("total"), (result or {}).get("score"),
-        )
-        return result
+        return _grade_coding(solution_text, artifact, language)
 
     return _grade_case_study(solution_text, artifact)
+
+
+def _grade_coding(solution_text: str, artifact: dict, language: str):
+    """Route to the appropriate code executor based on language."""
+    if language == "javascript":
+        from tools.code_executor import execute_javascript
+        tests = artifact.get("unit_tests") or []
+        result = execute_javascript(solution_text, "\n".join(tests))
+    elif language == "sql":
+        from tools.code_executor import execute_sql
+        assertions = artifact.get("sql_assertions") or []
+        result = execute_sql(solution_text, "\n".join(assertions))
+    else:
+        # Python (default)
+        from tools.code_executor import execute_tests
+        tests = artifact.get("unit_tests") or []
+        # Join with "\n" (not "\n\n"): the grader sometimes returns the test module split into
+        # per-line fragments; a single newline reconstructs it faithfully (indentation preserved).
+        result = execute_tests(solution_text, "\n".join(tests))
+
+    logger.info(
+        "Grader: coding result %s/%s passed (score=%s, language=%s)",
+        (result or {}).get("passed"), (result or {}).get("total"),
+        (result or {}).get("score"), language,
+    )
+    return result
 
 
 def _grade_case_study(solution_text: str, artifact: dict) -> Optional[dict]:
@@ -153,5 +181,6 @@ if __name__ == "__main__":
             "recursion in Python",
             "coding_challenge",
             "Implement `factorial(n)` returning n!. factorial(0)==1, factorial(5)==120.",
+            exercise_language="python",
         )
     )

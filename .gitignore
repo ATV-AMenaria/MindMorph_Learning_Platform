@@ -27,3 +27,6 @@ docs/archive/source-pdfs/
 
 # Playwright scratch drivers used for live capture runs
 web/.live_e2e*.mjs
+
+# Code audit & onboarding doc (local, untracked)
+CODE_AUDIT.md

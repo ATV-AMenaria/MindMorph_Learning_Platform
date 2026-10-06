@@ -6,6 +6,7 @@ import { useState } from "react";
 import { AssessmentQuiz } from "@/components/AssessmentQuiz";
 import { GradeResult } from "@/components/GradeResult";
 import { LessonPanel } from "@/components/LessonPanel";
+import { LessonSkeleton } from "@/components/LessonSkeleton";
 import { SkillGraph } from "@/components/SkillGraph";
 import { TutorChat } from "@/components/TutorChat";
 import { LockedError, api } from "@/lib/api";
@@ -208,12 +209,20 @@ export default function SessionPage() {
             ⚠️ {errorMsg}
           </p>
         )}
-        {open.isPending && <p className="mt-3 text-sm text-text-muted">Composing lesson…</p>}
+        {open.isPending && (
+          <p className="mt-3 flex items-center gap-2 text-sm text-text-muted">
+            <span className="lesson-skeleton-spinner" />
+            Composing lesson…
+          </p>
+        )}
       </section>
 
       <section className="mt-8">
-        {selected && session.lessons[selected] ? (
+        {open.isPending ? (
+          <LessonSkeleton />
+        ) : selected && session.lessons[selected] ? (
           <LessonPanel
+            key={selected}
             session={session}
             nodeId={selected}
             grading={grade.isPending}

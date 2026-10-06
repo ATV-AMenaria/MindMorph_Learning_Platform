@@ -22,6 +22,7 @@ from prompts.exercise_synthesizer_prompt import EXERCISE_SYNTHESIZER_SYSTEM_PROM
 
 _HUMAN_TEMPLATE = """Learner goal: {user_query}
 Exercise format: {exercise_format}
+Coding language: {exercise_language}
 
 GITHUB MATERIAL:
 {github_material}
@@ -50,6 +51,7 @@ class ExerciseSynthesizerAgent:
         self,
         user_query: str,
         exercise_format: str,
+        exercise_language: Optional[str] = None,
         github_material: Optional[str] = None,
         blog_material: Optional[str] = None,
         dataset_material: Optional[str] = None,
@@ -69,6 +71,7 @@ class ExerciseSynthesizerAgent:
             messages = self.chat_prompt.format_messages(
                 user_query=user_query,
                 exercise_format=exercise_format,
+                exercise_language=exercise_language or "(not applicable)",
                 github_material=github_material or _NONE,
                 blog_material=blog_material or _NONE,
                 dataset_material=dataset_material or _NONE,

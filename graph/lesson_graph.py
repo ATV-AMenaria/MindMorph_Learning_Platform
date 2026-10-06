@@ -39,6 +39,7 @@ class LessonState(TypedDict, total=False):
     # Outputs.
     content: Optional[str]
     exercise_format: Optional[str]
+    exercise_language: Optional[str]   # 'python' | 'javascript' | 'sql'
     exercise_statement: Optional[str]
     grading_artifact: Optional[dict]
 
@@ -86,6 +87,7 @@ def build_lesson_graph(content_graph: Optional[Any] = None, exercise_graph: Opti
             out = await exercise_graph.ainvoke({"user_query": skill_query})
         return {
             "exercise_format": out.get("exercise_format"),
+            "exercise_language": out.get("exercise_language"),
             "exercise_statement": out.get("exercise_statement"),
             "grading_artifact": out.get("grading_artifact"),
         }

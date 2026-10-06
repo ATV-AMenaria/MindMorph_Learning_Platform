@@ -254,7 +254,6 @@ def execute_tests(
     finally:
         _rmtree_quiet(tmp)
 
-
 # Generated tests must be self-contained: the sandbox holds only solution.py, so a test that reads a
 # data file can never pass. Catch that statically — a stub dry run cannot, since the open happens
 # inside the (stubbed-out) learner function.
@@ -285,6 +284,364 @@ def check_test_artifact(unit_tests: List[str]) -> Optional[str]:
     if result.get("harness_error"):
         return "; ".join(result.get("failures") or ["tests could not run"])
     return None
+
+
+# =============================================================================
+# JavaScript execution harness (Node.js built-in node:test + node:assert)
+# =============================================================================
+
+# Self-contained Node.js runner — mirrors the Python _RUNNER_SRC protocol.
+# Uses CommonJS require so tests can `require('./solution')`. Runs every function whose name starts
+# with `test` exported from `test_solution.js`, or delegates to `node:test` describe/it blocks.
+_JS_RUNNER_SRC = r'''
+const path = require('path');
+const fs = require('fs');
+
+let passed = 0;
+const failures = [];
+const harness = [];
+
+function harnessReason(e) {
+  const msg = String(e.message || e);
+  // MODULE_NOT_FOUND for anything other than ./solution = harness fault
+  if (e.code === 'MODULE_NOT_FOUND' && !msg.includes('./solution')) {
+    return 'the grading environment has no module: ' + msg;
+  }
+  // SyntaxError in test file = harness fault
+  if (e instanceof SyntaxError && e.stack && e.stack.includes('test_solution.js') && !e.stack.includes('solution.js:')) {
+    return 'the generated test module is not valid JavaScript';
+  }
+  // ReferenceError in test file = harness fault (undeclared name)
+  if (e instanceof ReferenceError && e.stack && e.stack.includes('test_solution.js') && !e.stack.includes('solution.js:')) {
+    return 'the generated test uses an undeclared name';
+  }
+  return null;
+}
+
+// Try to load the test module
+let testMod;
+try {
+  testMod = require('./test_solution');
+} catch (e) {
+  const reason = harnessReason(e);
+  const oneLine = String(e.message || e).replace(/\n/g, ' ');
+  console.log((reason ? 'MINDMORPH_HARNESS ' : 'MINDMORPH_FAILURE ') +
+              'collect: ' + oneLine + (reason ? ' [' + reason + ']' : ''));
+  console.log('MINDMORPH_SUMMARY 0 0');
+  process.exit(0);
+}
+
+// Discover test_* functions from exports
+const tests = Object.entries(testMod || {}).filter(
+  ([name, fn]) => name.startsWith('test') && typeof fn === 'function'
+);
+
+if (tests.length === 0) {
+  // No exported test_* functions — the test may use describe/it blocks via node:test.
+  // Run the test module as a node:test script instead.
+  const { execSync } = require('child_process');
+  try {
+    const out = execSync(
+      '"' + process.execPath + '" --test test_solution.js',
+      { cwd: __dirname, timeout: 8000, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+    // Parse node:test TAP output
+    const passMatch = out.match(/# pass (\d+)/);
+    const failMatch = out.match(/# fail (\d+)/);
+    const p = passMatch ? parseInt(passMatch[1]) : 0;
+    const f = failMatch ? parseInt(failMatch[1]) : 0;
+    const total = p + f;
+    if (f > 0) {
+      // Extract failure details from TAP
+      const failLines = out.split('\n').filter(l => l.trim().startsWith('not ok'));
+      for (const line of failLines) {
+        console.log('MINDMORPH_FAILURE ' + line.trim());
+      }
+    }
+    console.log('MINDMORPH_SUMMARY ' + p + ' ' + total);
+  } catch (runErr) {
+    const stderr = String(runErr.stderr || runErr.stdout || runErr.message || '');
+    const reason = harnessReason(runErr);
+    if (reason) {
+      console.log('MINDMORPH_HARNESS ' + stderr.replace(/\n/g, ' ').slice(0, 500) + ' [' + reason + ']');
+    } else {
+      // Parse TAP from failed run
+      const output = String(runErr.stdout || '');
+      const passMatch = output.match(/# pass (\d+)/);
+      const failMatch = output.match(/# fail (\d+)/);
+      const p = passMatch ? parseInt(passMatch[1]) : 0;
+      const f = failMatch ? parseInt(failMatch[1]) : 0;
+      if (p + f > 0) {
+        const failLines = output.split('\n').filter(l => l.trim().startsWith('not ok'));
+        for (const line of failLines) {
+          console.log('MINDMORPH_FAILURE ' + line.trim());
+        }
+        console.log('MINDMORPH_SUMMARY ' + p + ' ' + (p + f));
+      } else {
+        console.log('MINDMORPH_FAILURE ' + stderr.replace(/\n/g, ' ').slice(0, 500));
+        console.log('MINDMORPH_SUMMARY 0 0');
+      }
+    }
+  }
+  process.exit(0);
+}
+
+// Run exported test_* functions directly
+for (const [name, fn] of tests) {
+  try {
+    fn();
+    passed++;
+  } catch (e) {
+    const oneLine = String(e.message || e).replace(/\n/g, ' ');
+    const reason = harnessReason(e);
+    if (reason) {
+      harness.push(name + ': ' + oneLine + ' [' + reason + ']');
+    } else {
+      failures.push(name + ': ' + oneLine);
+    }
+  }
+}
+
+for (const h of harness) console.log('MINDMORPH_HARNESS ' + h);
+for (const f of failures) console.log('MINDMORPH_FAILURE ' + f);
+console.log('MINDMORPH_SUMMARY ' + passed + ' ' + tests.length);
+'''
+
+# Stub JS solution: a Proxy that returns a no-op function for any property access.
+_STUB_JS_SOLUTION = (
+    "module.exports = new Proxy({}, { get: (_, name) => (...args) => undefined });\n"
+)
+
+
+def _child_env_js(tmp: str) -> Dict[str, str]:
+    """Like _child_env() but sets NODE_PATH instead of PYTHONPATH for Node.js."""
+    env = {k: v for k, v in os.environ.items()
+           if not any(marker in k.upper() for marker in _SECRET_MARKERS)}
+    env["NODE_PATH"] = tmp
+    return env
+
+
+def execute_javascript(
+    solution_code: str,
+    test_code: str,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+) -> Dict[str, Any]:
+    """Run JavaScript tests against learner code using Node.js. Same return shape as execute_tests."""
+    if not test_code or not test_code.strip():
+        return _harness_result(["No unit tests were generated for this exercise."])
+
+    # Find node executable
+    node_cmd = "node"
+    if os.name == "nt":
+        # On Windows, shutil.which handles .cmd/.exe resolution
+        import shutil
+        found = shutil.which("node")
+        if found:
+            node_cmd = found
+        else:
+            return _harness_result(["Node.js is not installed — cannot grade JavaScript exercises."])
+
+    tmp = tempfile.mkdtemp(prefix="mindmorph_grade_js_")
+    try:
+        with open(os.path.join(tmp, "solution.js"), "w") as f:
+            f.write(solution_code or "")
+        with open(os.path.join(tmp, "test_solution.js"), "w") as f:
+            f.write(test_code)
+        with open(os.path.join(tmp, "_runner.js"), "w") as f:
+            f.write(_JS_RUNNER_SRC)
+
+        env = _child_env_js(tmp)
+        stdout, _returncode, timed_out = _run([node_cmd, "_runner.js"], tmp, env, timeout)
+        stdout = _strip_sandbox_paths(stdout)
+        if timed_out:
+            return {"passed": 0, "total": 0, "failures": ["Execution timed out (possible infinite loop)."],
+                    "score": 0.0, "stdout": (stdout or "")[-4000:], "timed_out": True}
+
+        harness = _extract_harness(stdout)
+        if harness:
+            return _harness_result(harness, stdout)
+
+        parsed = _parse_summary(stdout or "")
+        if parsed is None:
+            return _harness_result(
+                _extract_failures(stdout) or ["The grading runner could not execute the tests."], stdout)
+
+        passed, total = parsed
+        score = (passed / total * 100.0) if total else 0.0
+        return {
+            "passed": passed,
+            "total": total,
+            "failures": _extract_failures(stdout),
+            "score": score,
+            "stdout": (stdout or "")[-4000:],
+            "timed_out": False,
+        }
+    finally:
+        _rmtree_quiet(tmp)
+
+
+def check_test_artifact_js(unit_tests: List[str]) -> Optional[str]:
+    """Validate a freshly generated JS test module. Returns a reason it can never run, or None."""
+    src = "\n".join(unit_tests or [])
+    if not src.strip():
+        return "no unit tests were generated"
+    result = execute_javascript(_STUB_JS_SOLUTION, src)
+    if result.get("harness_error"):
+        return "; ".join(result.get("failures") or ["tests could not run"])
+    return None
+
+
+# =============================================================================
+# SQL execution harness (Python sqlite3 stdlib)
+# =============================================================================
+
+_SQL_RUNNER_SRC = r'''
+import json, sqlite3, sys, traceback
+
+passed, failures, harness = 0, [], []
+
+# Read inputs
+with open("solution.sql") as f:
+    solution_sql = f.read()
+with open("test_assertions.json") as f:
+    raw_assertions = f.read()
+
+# Parse assertions
+try:
+    assertions = json.loads(raw_assertions)
+    if not isinstance(assertions, list):
+        assertions = [assertions]
+except (json.JSONDecodeError, ValueError) as e:
+    print("MINDMORPH_HARNESS collect: invalid assertion JSON [the generated test assertions are malformed]")
+    print("MINDMORPH_SUMMARY 0 0")
+    sys.exit(0)
+
+# Execute the learner's SQL
+conn = sqlite3.connect(":memory:")
+try:
+    conn.executescript(solution_sql)
+except Exception as e:
+    msg = " ".join(str(e).split())
+    print("MINDMORPH_FAILURE collect: Solution SQL error: " + msg)
+    print("MINDMORPH_SUMMARY 0 " + str(len(assertions)))
+    sys.exit(0)
+
+# Run each assertion
+for i, assertion in enumerate(assertions):
+    label = assertion.get("label", f"test_{i+1}")
+    query = assertion.get("query", "")
+    expected = assertion.get("expected", [])
+    try:
+        cursor = conn.execute(query)
+        actual = [list(row) for row in cursor.fetchall()]
+        if actual == expected:
+            passed += 1
+        else:
+            failures.append(
+                label + ": expected " + json.dumps(expected) + " but got " + json.dumps(actual)
+            )
+    except Exception as e:
+        msg = " ".join(str(e).split())
+        # Syntax error in the TEST query = harness fault
+        if "syntax error" in msg.lower() or "no such" in msg.lower():
+            harness.append(label + ": " + msg + " [the generated test query is invalid SQL]")
+        else:
+            failures.append(label + ": SQL error: " + msg)
+
+conn.close()
+
+for h in harness:
+    print("MINDMORPH_HARNESS " + h)
+for f in failures:
+    print("MINDMORPH_FAILURE " + f)
+print("MINDMORPH_SUMMARY %d %d" % (passed, len(assertions)))
+'''
+
+
+def execute_sql(
+    solution_sql: str,
+    test_assertions_json: str,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+) -> Dict[str, Any]:
+    """Run SQL assertions against learner's SQL using SQLite. Same return shape as execute_tests."""
+    if not test_assertions_json or not test_assertions_json.strip():
+        return _harness_result(["No SQL test assertions were generated for this exercise."])
+
+    tmp = tempfile.mkdtemp(prefix="mindmorph_grade_sql_")
+    try:
+        with open(os.path.join(tmp, "solution.sql"), "w") as f:
+            f.write(solution_sql or "")
+        with open(os.path.join(tmp, "test_assertions.json"), "w") as f:
+            f.write(test_assertions_json)
+        with open(os.path.join(tmp, "_sql_runner.py"), "w") as f:
+            f.write(_SQL_RUNNER_SRC)
+
+        env = _child_env(tmp)
+        stdout, _returncode, timed_out = _run([sys.executable, "_sql_runner.py"], tmp, env, timeout)
+        stdout = _strip_sandbox_paths(stdout)
+        if timed_out:
+            return {"passed": 0, "total": 0, "failures": ["Execution timed out."],
+                    "score": 0.0, "stdout": (stdout or "")[-4000:], "timed_out": True}
+
+        harness = _extract_harness(stdout)
+        if harness:
+            return _harness_result(harness, stdout)
+
+        parsed = _parse_summary(stdout or "")
+        if parsed is None:
+            return _harness_result(
+                _extract_failures(stdout) or ["The grading runner could not execute the tests."], stdout)
+
+        passed, total = parsed
+        score = (passed / total * 100.0) if total else 0.0
+        return {
+            "passed": passed,
+            "total": total,
+            "failures": _extract_failures(stdout),
+            "score": score,
+            "stdout": (stdout or "")[-4000:],
+            "timed_out": False,
+        }
+    finally:
+        _rmtree_quiet(tmp)
+
+
+def check_test_artifact_sql(sql_assertions: List[str]) -> Optional[str]:
+    """Validate freshly generated SQL test assertions. Returns a reason they can never run, or None."""
+    import json as _json
+    raw = "\n".join(sql_assertions or [])
+    if not raw.strip():
+        return "no SQL assertions were generated"
+    # Validate that each element is valid JSON
+    for i, element in enumerate(sql_assertions):
+        try:
+            obj = _json.loads(element)
+            if not isinstance(obj, dict):
+                return f"assertion {i+1} is not a JSON object"
+            if "query" not in obj or "expected" not in obj:
+                return f"assertion {i+1} is missing 'query' or 'expected' keys"
+        except (ValueError, _json.JSONDecodeError):
+            return f"assertion {i+1} is not valid JSON"
+    return None
+
+
+# =============================================================================
+# Unified exercise dispatcher
+# =============================================================================
+
+def execute_exercise(
+    language: str,
+    solution_code: str,
+    test_code: str,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+) -> Dict[str, Any]:
+    """Unified entry point: routes to the right executor based on language."""
+    if language == "javascript":
+        return execute_javascript(solution_code, test_code, timeout)
+    elif language == "sql":
+        return execute_sql(solution_code, test_code, timeout)
+    else:
+        return execute_tests(solution_code, test_code, timeout)
 
 
 def _run(cmd, cwd, env, timeout):
@@ -337,4 +694,21 @@ def _rmtree_quiet(path: str):
 if __name__ == "__main__":
     demo_solution = "def add(a, b):\n    return a + b\n"
     demo_tests = "from solution import add\n\ndef test_add():\n    assert add(2, 3) == 5\n"
+    print("=== Python ===")
     print(execute_tests(demo_solution, demo_tests))
+
+    demo_js_solution = "function add(a, b) { return a + b; }\nmodule.exports = { add };\n"
+    demo_js_tests = (
+        "const assert = require('node:assert/strict');\n"
+        "const { add } = require('./solution');\n\n"
+        "function test_add() { assert.strictEqual(add(2, 3), 5); }\n"
+        "module.exports = { test_add };\n"
+    )
+    print("\n=== JavaScript ===")
+    print(execute_javascript(demo_js_solution, demo_js_tests))
+
+    demo_sql = "CREATE TABLE t(x INT);\nINSERT INTO t VALUES (1),(2),(3);\n"
+    demo_sql_tests = '{"label":"count","query":"SELECT COUNT(*) FROM t","expected":[[3]]}'
+    print("\n=== SQL ===")
+    print(execute_sql(demo_sql, demo_sql_tests))
+

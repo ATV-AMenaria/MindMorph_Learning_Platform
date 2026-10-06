@@ -40,13 +40,16 @@ export interface NodeState {
 
 export interface GradingArtifact {
   format?: string;
+  language?: "python" | "javascript" | "sql" | null;
   unit_tests?: string[];
+  sql_assertions?: string[];
   rubric?: { criterion?: string; weight?: number }[];
   instructions?: string;
 }
 
 export interface Exercise {
   format?: "coding_challenge" | "case_study" | null;
+  language?: "python" | "javascript" | "sql" | null;
   statement?: string | null;
   grading_artifact?: GradingArtifact | null;
 }
