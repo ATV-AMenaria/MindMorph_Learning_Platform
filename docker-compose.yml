@@ -21,5 +21,23 @@ services:
       timeout: 5s
       retries: 5
 
+  neo4j:
+    image: neo4j:5-community
+    container_name: mindmorph-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/mindmorph_neo4j
+      NEO4J_PLUGINS: '["graph-data-science"]'
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - mindmorph_neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p mindmorph_neo4j 'RETURN 1'"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
 volumes:
   mindmorph_pgdata:
+  mindmorph_neo4j_data:

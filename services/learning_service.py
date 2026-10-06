@@ -8,8 +8,10 @@ The async LangGraph ``ainvoke`` calls are wrapped in synchronous helpers (fresh 
 mirroring the original ``app.py``) so callers — sync FastAPI routes or Streamlit — need no async glue.
 """
 import asyncio
+import hashlib
 import json
 import logging
+import re
 from typing import Optional
 
 from services.completion import (
@@ -40,6 +42,73 @@ logger = logging.getLogger(__name__)
 def _empty_usage() -> dict:
     """Session-level cost/cache accumulator (unit-economics observability). Persists in the JSONB row."""
     return {"composes": 0, "cache_hits": 0, "tokens_in": 0, "tokens_out": 0, "est_cost_usd": 0.0}
+
+def _normalize_query(q: str) -> str:
+    """Produce a canonical topic key from a user query for cache matching."""
+    return re.sub(r"\s+", " ", q.lower().strip())
+
+def _get_graph_from_cache(canonical: str) -> Optional[dict]:
+    """Look up an existing skill graph from Neo4j (Phase 3) or Postgres graph_cache (Phase 1).
+    Falls through to None on any failure — pipeline runs as normal fallback."""
+    # Phase 3: Neo4j is the primary source of truth
+    try:
+        from persistence.neo4j_graph import topic_graph_exists, read_skill_graph
+        if topic_graph_exists(canonical):
+            graph = read_skill_graph(canonical)
+            if graph:
+                logger.info("neo4j: HIT for %r", canonical)
+                return graph
+    except Exception:
+        logger.warning("neo4j read failed (non-fatal), falling back to Postgres", exc_info=True)
+
+    # Phase 1: Postgres fallback
+    try:
+        from sqlalchemy import text
+        from persistence.db import get_sessionmaker
+        cache_key = hashlib.sha256(canonical.encode()).hexdigest()
+        with get_sessionmaker()() as session:
+            row = session.execute(
+                text("SELECT skill_graph FROM graph_cache WHERE cache_key = :key"),
+                {"key": cache_key},
+            ).fetchone()
+            if row:
+                session.execute(
+                    text("UPDATE graph_cache SET hit_count = hit_count + 1, "
+                         "last_hit_at = now() WHERE cache_key = :key"),
+                    {"key": cache_key},
+                )
+                session.commit()
+                logger.info("graph_cache: HIT for %r", canonical)
+                return dict(row[0])
+    except Exception:
+        logger.warning("graph_cache lookup failed (non-fatal)", exc_info=True)
+    return None
+
+def _save_graph_to_cache(canonical: str, query_text: str, skill_graph: dict) -> None:
+    """Save a new skill graph to Postgres graph_cache and, if Neo4j is running, to Neo4j."""
+    try:
+        from sqlalchemy import text
+        from persistence.db import get_sessionmaker
+        cache_key = hashlib.sha256(canonical.encode()).hexdigest()
+        with get_sessionmaker()() as session:
+            session.execute(
+                text("INSERT INTO graph_cache "
+                     "(cache_key, canonical_topic, query_text, skill_graph) "
+                     "VALUES (:key, :topic, :query, :graph::jsonb) "
+                     "ON CONFLICT (cache_key) DO NOTHING"),
+                {"key": cache_key, "topic": canonical,
+                 "query": query_text, "graph": json.dumps(skill_graph)},
+            )
+            session.commit()
+    except Exception:
+        logger.warning("graph_cache write failed (non-fatal)", exc_info=True)
+
+    # Phase 2: also write to Neo4j (non-fatal if not configured)
+    try:
+        from persistence.neo4j_graph import write_skill_graph
+        write_skill_graph(canonical, skill_graph)
+    except Exception:
+        pass # neo4j write failed (non-fatal — Postgres cache still saved)
 
 # --- Lazy per-process graph/agent singletons --------------------------------------------------
 _orchestration_graph = None
@@ -219,11 +288,34 @@ def start_session(user_query: str, format_type: str = "B") -> dict:
     yields a persistable ``learning_session`` (the adaptive loop); CONTENT/EXERCISE are transient.
     """
     logger.info("service: start_session (query=%r, format=%s)", user_query, format_type)
+    canonical = _normalize_query(user_query)
+
+    # ── Cache check: return immediately if graph already built ────────────────
+    cached_graph = _get_graph_from_cache(canonical)
+    if cached_graph:
+        # Mock a final state shape for new_learning_session
+        ls = new_learning_session({"skill_graph": cached_graph}, format_type)
+        if ls:
+            ls["usage"]["cache_hits"] = 1
+            return {"route": "SCOUT", "learning_session": ls, "final_content": None, "exercise": None}
+    # ─────────────────────────────────────────────────────────────────────────
+
     with collect() as spans, span("graph.total"):
         final_state = _run_async(
             _get_orchestration_graph().ainvoke({"user_query": user_query, "format_type": format_type})
         )
-    return _route_final_state(final_state, format_type, spans_payload(spans))
+    result = _route_final_state(final_state, format_type, spans_payload(spans))
+
+    # ── Save the new graph to cache after pipeline completes ──────────────────
+    if result.get("route") == "SCOUT":
+        ls = result.get("learning_session")
+        if ls:
+            sg = ls.get("skill_graph")
+            if sg:
+                _save_graph_to_cache(canonical, user_query, sg)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    return result
 
 
 async def astream_session(user_query: str, format_type: str = "B"):
@@ -238,6 +330,19 @@ async def astream_session(user_query: str, format_type: str = "B"):
     partial update into ``final_state`` reproduces exactly what ``ainvoke`` would have returned.
     """
     logger.info("service: astream_session (query=%r, format=%s)", user_query, format_type)
+    canonical = _normalize_query(user_query)
+
+    # ── Cache check: return immediately if graph already built ────────────────
+    cached_graph = _get_graph_from_cache(canonical)
+    if cached_graph:
+        ls = new_learning_session({"skill_graph": cached_graph}, format_type)
+        if ls:
+            ls["usage"]["cache_hits"] = 1
+            yield {"stage": "cache", "label": "Loading from cache"}
+            yield {"result": {"route": "SCOUT", "learning_session": ls, "final_content": None, "exercise": None}}
+            return
+    # ─────────────────────────────────────────────────────────────────────────
+
     final_state: dict = {}
     with collect() as spans, span("graph.total"):
         async for update in _get_orchestration_graph().astream(
@@ -246,7 +351,19 @@ async def astream_session(user_query: str, format_type: str = "B"):
             for node_name, node_output in update.items():
                 final_state.update(node_output or {})
                 yield {"stage": node_name, "label": STAGE_LABELS.get(node_name, node_name)}
-    yield {"result": _route_final_state(final_state, format_type, spans_payload(spans))}
+    
+    result = _route_final_state(final_state, format_type, spans_payload(spans))
+
+    # ── Save the new graph to cache after pipeline completes ──────────────────
+    if result.get("route") == "SCOUT":
+        ls = result.get("learning_session")
+        if ls:
+            sg = ls.get("skill_graph")
+            if sg:
+                _save_graph_to_cache(canonical, user_query, sg)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    yield {"result": result}
 
 
 def _run_lesson(

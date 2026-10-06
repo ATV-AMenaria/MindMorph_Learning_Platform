@@ -23,6 +23,7 @@ if PROJECT_ROOT not in sys.path:
 logger = logging.getLogger(__name__)
 
 from langgraph.graph import StateGraph, START, END
+from langchain_neo4j import Neo4jGraph, Neo4jSaver
 
 from agents.orchestrator.orchestrator_agent import OrchestratorAgent
 from agents.scout.scout_agent import ScoutAgent
@@ -336,4 +337,14 @@ def build_graph(
     # Other routes.
     g.add_edge("placeholder", END)
 
-    return g.compile()
+    try:
+        neo4j_graph = Neo4jGraph(
+            url=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+            username=os.getenv("NEO4J_USER", "neo4j"),
+            password=os.getenv("NEO4J_PASSWORD", "mindmorph_neo4j")
+        )
+        saver = Neo4jSaver(graph=neo4j_graph)
+        return g.compile(checkpointer=saver)
+    except Exception as e:
+        logger.warning(f"Could not connect to Neo4j Checkpointer, running without checkpointer: {e}")
+        return g.compile()
