@@ -204,11 +204,12 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
     the learner's RAG material (`build_tutor_messages` pulls `lessons[node_id]` + per-user
     `RagStore.retrieve`). `POST /sessions/{user}/{session}/chat` streams tokens over **SSE** and persists
     each turn to `learning_session["chat"]` (JSONB; user message saved before streaming so it survives a
-    dropped stream). Streams through the **same provider chain** as every other agent
-    (`get_chat_model("default", temperature=…)`; `ProviderChain.astream` rotates keys only before the
-    first token, then falls back to Ollama). Web `TutorChat.tsx` (buffered SSE-over-fetch) on the session
-    page. Verified live (real Groq → 74 token frames). *Deferred:* **voice** (Whisper STT / ElevenLabs TTS),
-    streaming through the router, multi-thread chats. *Satisfies:* §2.
+    dropped stream). ✅ **Streams through the Model Router** — `TutorAgent` now calls
+    `get_chat_model(tier, provider, fallback, temperature=…)` with tutor-specific overrides readable from
+    `MINDMORPH_TUTOR_PROVIDER` / `MINDMORPH_TUTOR_FALLBACK` / `MINDMORPH_TUTOR_TIER` env vars;
+    `ProviderChain.astream` rotates keys only before the first token, then falls back to Ollama. Web
+    `TutorChat.tsx` (buffered SSE-over-fetch) on the session page. Verified live (real Groq → 74 token
+    frames). *Deferred:* **voice** (Whisper STT / ElevenLabs TTS), multi-thread chats. *Satisfies:* §2.
 11. **Screen Vision + Browser Automation agents.** *Satisfies:* §2.
 12. 🟡 **Next.js 15 / React 19 frontend** (`web/`) — brought forward alongside #6 (it's what justifies
     the HTTP backend). Dark-luxury UI consuming the FastAPI API via TanStack Query: localStorage login,
