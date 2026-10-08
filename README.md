@@ -155,6 +155,26 @@ the headroom. Keep the model on the OpenAI OSS family; Groq has deprecated its L
 For the durable path: `docker compose up -d db && conda run -n mindmorph alembic upgrade head`, then
 start the backend without `MINDMORPH_STORE=memory`.
 
+### Observability (LangSmith)
+
+To trace the execution of the 16 agents and 4 graphs (highly recommended for debugging AI reasoning and adaptation loops), you can use LangSmith. 
+
+**Setup Instructions:**
+1. Go to [smith.langchain.com](https://smith.langchain.com/) and create a free account.
+2. In the LangSmith UI, click on **Tracing** and create a new project named `MindMorph_Local`.
+3. Go to Settings (gear icon) -> API Keys, and generate a new API Key.
+4. Add the following to your `.env` file, pasting your new key:
+
+```env
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_ENDPOINT="https://api.smith.langchain.com"
+LANGCHAIN_PROJECT="MindMorph_Local"
+LANGCHAIN_API_KEY="your_langsmith_api_key"
+```
+
+5. **Restart your backend:** Kill the running `uvicorn` process in your terminal and start it again so it loads the new keys.
+6. **Trigger a run:** Go to the web UI and search for a new topic. Return to your LangSmith project dashboard to see the real-time visual trace tree of every LLM prompt, tool call, and token count.
+
 ### Programmatic access
 
 ```bash
