@@ -15,6 +15,9 @@ from prompts.orchestrator_prompt import ORCHESTRATOR_SYSTEM_PROMPT
 from prompts.prompt_registry_wrapper_method import setup_agent_prompt
 from config import llm
 from agents.orchestrator.orchestrator_agent_output_schema import Orchestrator_Output_Schema
+from services.routing.laya_router import route_with_laya
+
+VALID_AGENTS = frozenset({"SCOUT", "CONTENT", "EXERCISE"})
 
 
 class OrchestratorAgent:
@@ -41,53 +44,63 @@ class OrchestratorAgent:
 
     
             
-    def  route_query(self, user_query: str) -> Optional[Orchestrator_Output_Schema]:
-            """
-            Route user query to appropriate agent with error handling and retry logic.
+    def route_query(self, user_query: str) -> Optional[Orchestrator_Output_Schema]:
+        """
+        Route user query to appropriate agent using Laya local decision model as primary,
+        with seamless fallback to the LLM router if Laya is unavailable.
+        
+        Args:
+            user_query: The user's input query
             
-            Args:
-                user_query: The user's input query
-                
-            Returns:
-                Orchestrator_Output_Schema object with assigned agent and reasoning, or None on failure
-                
-            Raises:
-                ValueError: If user_query is empty or invalid
-            """
+        Returns:
+            Orchestrator_Output_Schema object with assigned agent and reasoning
             
-            # Input validation
-            if not user_query or not isinstance(user_query, str):
-                raise ValueError("User query must be a non-empty string")
-            
-            user_query = user_query.strip()
-            if len(user_query) == 0:
-                raise ValueError("User query cannot be empty after stripping whitespace")
-            
-            
-            
-            logger.info("Orchestrator: routing query %r", user_query)
-            try:
-                    # Format prompt with user query
-                    chat_prompt = self.chat_prompt.format_messages(user_query=user_query)
+        Raises:
+            ValueError: If user_query is empty or invalid
+        """
+        # Input validation
+        if not user_query or not isinstance(user_query, str):
+            raise ValueError("User query must be a non-empty string")
+        
+        user_query = user_query.strip()
+        if len(user_query) == 0:
+            raise ValueError("User query cannot be empty after stripping whitespace")
+        
+        # 1. PRIMARY: Try fast local Laya decision model (< 40ms)
+        try:
+            laya_choice = route_with_laya(user_query)
+            if laya_choice in VALID_AGENTS:
+                logger.info("Orchestrator: routed to %s via Laya primary", laya_choice)
+                return Orchestrator_Output_Schema(
+                    Assigned_Agent=laya_choice,
+                    Reasoning=f"Routed via Laya local decision model into {laya_choice}."
+                )
+        except Exception as e:
+            logger.warning("Orchestrator: Laya primary router error (%s), using LLM fallback", e)
 
-                    # Invoke structured LLM
-                    response = self.structured_llm.invoke(chat_prompt)
+        # 2. FALLBACK: Use existing LLM router (Groq / Ollama)
+        logger.info("Orchestrator: routing query %r via LLM fallback", user_query)
+        try:
+            # Format prompt with user query
+            chat_prompt = self.chat_prompt.format_messages(user_query=user_query)
 
-                    # Validate response structure
-                    if not isinstance(response, Orchestrator_Output_Schema):
-                        raise TypeError(f"Expected Orchestrator_Output_Schema, got {type(response)}")
+            # Invoke structured LLM
+            response = self.structured_llm.invoke(chat_prompt)
 
-                    # Validate assigned agent is one of expected values
-                    valid_agents = {"SCOUT", "CONTENT", "EXERCISE"}
-                    if response.Assigned_Agent not in valid_agents:
-                        raise ValueError(f"Invalid agent: {response.Assigned_Agent}. Must be one of {valid_agents}")
+            # Validate response structure
+            if not isinstance(response, Orchestrator_Output_Schema):
+                raise TypeError(f"Expected Orchestrator_Output_Schema, got {type(response)}")
 
-                    logger.info("Orchestrator: routed to %s", response.Assigned_Agent)
-                    return response
+            # Validate assigned agent is one of expected values
+            if response.Assigned_Agent not in VALID_AGENTS:
+                raise ValueError(f"Invalid agent: {response.Assigned_Agent}. Must be one of {VALID_AGENTS}")
 
-            except Exception as e:
-                logger.exception("Orchestrator: failed to route query")
-                raise RuntimeError(f"Failed to route query: {str(e)}")
+            logger.info("Orchestrator: routed to %s via LLM fallback", response.Assigned_Agent)
+            return response
+
+        except Exception as e:
+            logger.exception("Orchestrator: failed to route query via LLM fallback")
+            raise RuntimeError(f"Failed to route query: {str(e)}")
                     
 
 

@@ -22,10 +22,12 @@ from api.routes import router  # noqa: E402
 
 app = FastAPI(title="MindMorph API", version="1.0.0")
 
-_origins = os.getenv("MINDMORPH_CORS_ORIGINS", "http://localhost:3000").split(",")
+_default_origins = "http://localhost:3000,http://127.0.0.1:3000"
+_origins = os.getenv("MINDMORPH_CORS_ORIGINS", _default_origins).split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in _origins if o.strip()],
+    allow_origins=[o.strip().rstrip("/") for o in _origins if o.strip()],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
