@@ -84,6 +84,11 @@ through the editor above.
   can't stall a graph.
 - **Postgres is the system of record when durability is on.** SQLAlchemy 2 models under `persistence/`,
   migrations via Alembic, FastAPI routes in `api/`.
+- **Fast local decision routing with Laya (Primary).** Instead of spending 1.5s on a heavy generative LLM
+  just to pick one of three routes (`SCOUT` / `CONTENT` / `EXERCISE`), `agents/orchestrator/orchestrator_agent.py`
+  runs an in-process **Laya** decision model (`services/routing/laya_router.py`, sub-40ms, zero tokens, Apache 2.0).
+  If Laya is missing, loading, or toggled off (`MINDMORPH_USE_LAYA=0`), the orchestrator seamlessly falls back
+  to the Groq/Ollama LLM router. See [`docs/LAYA_ROUTING.md`](docs/LAYA_ROUTING.md) for architecture details.
 - **Neo4j Graph Architecture (Phase 3 Completed).** The core backend heavily relies on Neo4j for caching complex topics, tracking session mastery, and tracing AI thoughts. Read `docs/NEO4J_ARCHITECTURE.md` to learn how the Cypher Completion Engine computes adaptive learning paths.
   For local dev, `MINDMORPH_STORE=memory` skips all of that and keeps sessions in memory for the process lifetime.
 
@@ -150,6 +155,8 @@ the headroom. Keep the model on the OpenAI OSS family; Groq has deprecated its L
 | `NEO4J_URI` | `bolt://localhost:7687` | Connection string for Neo4j Graph DB |
 | `MINDMORPH_RAG` | off | Toggles knowledge-base retrieval grounding |
 | `MINDMORPH_KNOWLEDGE_DIR` | `knowledge_base/` | Corpus loaded into the vector store at startup |
+| `MINDMORPH_USE_LAYA` | `1` | Enables fast local Laya decision router (1 = on, 0 = force LLM fallback) |
+| `MINDMORPH_LAYA_MODEL` | `convaiinnovations/laya` | Model identifier or local weights path for Laya |
 | `NEXT_PUBLIC_JUPYTERLITE_URL` | hosted JupyterLite demo | Overrides the in-lesson scratchpad REPL |
 
 For the durable path: `docker compose up -d db && conda run -n mindmorph alembic upgrade head`, then
@@ -173,7 +180,7 @@ LANGCHAIN_API_KEY="your_langsmith_api_key"
 ```
 
 5. **Restart your backend:** Kill the running `uvicorn` process in your terminal and start it again so it loads the new keys.
-6. **Trigger a run:** Go to the web UI and search for a new topic. Return to your LangSmith project dashboard to see the real-time visual trace tree of every LLM prompt, tool call, and token count.
+6. **Trigger a run:** Go to the web UI and search for a new topic. Return to your LangSmith project dashboard to see the real-time visual trace tree of every LLM prompt, tool call, and token count. Under the `orchestrator` node, you will also see the explicit `laya_local_router` span indicating sub-40ms zero-token routing.
 
 ### Programmatic access
 
@@ -195,6 +202,7 @@ MINDMORPH_STORE=memory conda run -n mindmorph python -m pytest tests/ -q
 | `graph/` | 4 LangGraph workflows composing those agents, plus the skill-graph renderer and the adaptation merge |
 | `rag/` | Embeddings, chunking, in-memory and pgvector stores |
 | `services/` | Mastery scoring, completion, learning-service orchestration |
+| `services/routing/` | Fast local decision routing (`laya_router.py` primary + LLM fallback) |
 | `tools/` | Timeout-guarded code executor, MCP client, scrapers |
 | `api/` | FastAPI layer |
 | `persistence/` | SQLAlchemy models |
