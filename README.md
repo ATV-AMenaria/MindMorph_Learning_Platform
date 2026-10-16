@@ -91,6 +91,7 @@ through the editor above.
   to the Groq/Ollama LLM router. See [`docs/LAYA_ROUTING.md`](docs/LAYA_ROUTING.md) for architecture details.
 - **Neo4j Graph Architecture (Phase 3 Completed).** The core backend heavily relies on Neo4j for caching complex topics, tracking session mastery, and tracing AI thoughts. Read `docs/NEO4J_ARCHITECTURE.md` to learn how the Cypher Completion Engine computes adaptive learning paths.
   For local dev, `MINDMORPH_STORE=memory` skips all of that and keeps sessions in memory for the process lifetime.
+- **Real-time Kafka Event Streaming & Telemetry Bridge.** Student milestones (`lesson_opened`, `exercise_graded`, `node_mastered`, etc.) are streamed in real time via [`services/kafka_emitter.py`](services/kafka_emitter.py) and traced into LangSmith via [`services/telemetry.py`](services/telemetry.py). Unset `KAFKA_BOOTSTRAP_SERVERS` enables zero-infra dev mode with zero errors. See [`docs/KAFKA_TELEMETRY.md`](docs/KAFKA_TELEMETRY.md) for architecture and event schemas.
 
 ## Run it in two minutes
 
@@ -157,6 +158,8 @@ the headroom. Keep the model on the OpenAI OSS family; Groq has deprecated its L
 | `MINDMORPH_KNOWLEDGE_DIR` | `knowledge_base/` | Corpus loaded into the vector store at startup |
 | `MINDMORPH_USE_LAYA` | `1` | Enables fast local Laya decision router (1 = on, 0 = force LLM fallback) |
 | `MINDMORPH_LAYA_MODEL` | `convaiinnovations/laya` | Model identifier or local weights path for Laya |
+| `KAFKA_BOOTSTRAP_SERVERS` | unset | Comma-separated Kafka brokers (e.g. `localhost:9092`). Unset enables safe zero-infra dev mode |
+| `MINDMORPH_KAFKA_TOPIC` | `mindmorph.learning_events` | Kafka topic for real-time learner event streaming |
 | `NEXT_PUBLIC_JUPYTERLITE_URL` | hosted JupyterLite demo | Overrides the in-lesson scratchpad REPL |
 
 For the durable path: `docker compose up -d db && conda run -n mindmorph alembic upgrade head`, then
@@ -180,7 +183,9 @@ LANGCHAIN_API_KEY="your_langsmith_api_key"
 ```
 
 5. **Restart your backend:** Kill the running `uvicorn` process in your terminal and start it again so it loads the new keys.
-6. **Trigger a run:** Go to the web UI and search for a new topic. Return to your LangSmith project dashboard to see the real-time visual trace tree of every LLM prompt, tool call, and token count. Under the `orchestrator` node, you will also see the explicit `laya_local_router` span indicating sub-40ms zero-token routing.
+6. **Trigger a run:** Go to the web UI and search for a new topic. Return to your LangSmith project dashboard to see the real-time visual trace tree:
+   - Under the `orchestrator` node, see the explicit `laya_local_router` span indicating sub-40ms zero-token routing.
+   - For every learning action (`lesson_opened`, `exercise_graded`, `node_mastered`), see the child `learning_event_telemetry` and `kafka_event_emitter` spans tracking full payload metadata and emission delivery status.
 
 ### Programmatic access
 
@@ -201,7 +206,7 @@ MINDMORPH_STORE=memory conda run -n mindmorph python -m pytest tests/ -q
 | `agents/` | 16 single-responsibility agents — orchestrator, scout, academic, market, practical, consensus, reviewer, tutor, assessment, exercise, adaptation, content_generator, example_generator, visual_generator, synthesizer, factual |
 | `graph/` | 4 LangGraph workflows composing those agents, plus the skill-graph renderer and the adaptation merge |
 | `rag/` | Embeddings, chunking, in-memory and pgvector stores |
-| `services/` | Mastery scoring, completion, learning-service orchestration |
+| `services/` | Mastery scoring, completion, learning-service orchestration, telemetry bridge (`telemetry.py`, `kafka_emitter.py`, `events.py`) |
 | `services/routing/` | Fast local decision routing (`laya_router.py` primary + LLM fallback) |
 | `tools/` | Timeout-guarded code executor, MCP client, scrapers |
 | `api/` | FastAPI layer |
