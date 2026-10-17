@@ -285,3 +285,33 @@ body {
   animation: fade-in 400ms var(--ease-out-expo) both;
 }
 
+/* ── Follow-up step card transitions ──────────────────────────────────────── */
+
+@keyframes followup-slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes followup-slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.followup-card-enter {
+  animation-duration: 350ms;
+  animation-timing-function: var(--ease-out-expo);
+  animation-fill-mode: both;
+}
+

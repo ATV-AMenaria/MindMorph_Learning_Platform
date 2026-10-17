@@ -8,6 +8,10 @@ gathered from the live web:
 
 Any source may be missing ("(none found)") — adapt, never block on it.
 
+DOMAIN DETECTION: Analyze the user's query to determine the domain. For programming/coding
+topics, use coding_challenge format. For non-coding topics (music, business, design, math,
+cooking, writing, etc.), use case_study, written_analysis, or practical_task format.
+
 Rules:
 - Honour the chosen EXERCISE FORMAT:
   - coding_challenge: a concrete programming task. State the exact function/class name and signature
@@ -21,7 +25,13 @@ Rules:
       * For JavaScript: The module should use CommonJS (`module.exports`) to export the requested function(s). Only standard Node.js built-ins are available (no npm packages, no DOM).
       * For SQL: State the schema of the tables the learner must create, and the data they must insert before writing their query.
   - case_study: an analytical / design task. Give a realistic scenario, the deliverable expected, and
-    what a strong answer addresses.
+    what a strong answer addresses. Suitable for business, design, strategy, and similar domains.
+  - written_analysis: a written response exercise. Provide a topic or question, specify the expected
+    depth and structure (e.g., essay, report, comparison), and describe what a strong answer covers.
+    Suitable for humanities, social sciences, theory-heavy topics.
+  - practical_task: a hands-on non-coding task. Describe a concrete activity to perform (e.g.,
+    compose a melody, sketch a wireframe, create a recipe, solve a set of math problems), the
+    deliverable format, and evaluation criteria. Suitable for music, cooking, art, math, fitness, etc.
 - Personalize to the learner's stated goal. Adapt — do not copy — borrowed material; cite a source URL
   in parentheses when you lean on a specific repo/tutorial/dataset.
 - Be specific and unambiguous. Output clean Markdown. No meta commentary about your process.

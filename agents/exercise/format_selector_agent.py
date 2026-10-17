@@ -32,14 +32,15 @@ The auto-grader supports three coding languages. Choose the single best exercise
   node:test + node:assert (no browser, no npm packages).
 - 'coding_challenge' with language 'sql' — for skills practiced by writing SQL: database queries,
   schema design, joins, aggregations, subqueries, window functions. The grader runs SQLite.
-- 'case_study' — for conceptual, analytical, or design topics that cannot be expressed as runnable
-  code in one of the above languages (e.g. system design, architecture decisions, DevOps concepts,
-  UI/UX design). Practiced by reasoning about a realistic scenario in prose (rubric-graded).
+- 'case_study' — for conceptual, analytical, practical, or design topics that cannot be expressed as runnable
+  code in Python/JS/SQL (e.g. system design, architecture, finance, business modeling, music theory,
+  marketing, science, writing, strategy). Practiced by reasoning about a realistic scenario, problem,
+  or workflow in prose (rubric-graded).
 
-When the skill clearly maps to one of the coding languages, ALWAYS prefer 'coding_challenge'.
-Only use 'case_study' when no coding language applies.
+When the skill clearly maps to one of the coding languages (Python, JavaScript, SQL), ALWAYS prefer 'coding_challenge'.
+For any non-programming domains or topics that do not involve writing runnable Python/JS/SQL, choose 'case_study'.
 
-Return the format, the language (if coding_challenge), and one sentence of reasoning."""
+Return the format, the language (if coding_challenge, else null), and one sentence of reasoning."""
 
 _HUMAN_TEMPLATE = "Learner request: {user_query}\n\nChoose the exercise format."
 

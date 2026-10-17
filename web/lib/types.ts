@@ -86,9 +86,18 @@ export interface AssessmentQuiz {
   questions: MCQQuestion[];
 }
 
+export interface AssessmentResult {
+  question_id: string;
+  chosen_index: number;
+  correct_index: number;
+  explanation?: string;
+  is_correct: boolean;
+}
+
 export interface Assessment {
   quiz: AssessmentQuiz;
   submitted: boolean;
+  results?: AssessmentResult[];
 }
 
 export interface ChatMessage {
@@ -110,6 +119,10 @@ export interface LearningSession {
   review_passed?: boolean | null;
   review_notes?: string | null;
   format_type?: string;
+  domain?: string | null;
+  primary_language?: string | null;
+  scope?: string | null;
+  preferences?: Record<string, string> | null;
   node_state: Record<string, NodeState>;
   lessons: Record<string, Lesson>;
   selected_node?: string | null;
@@ -142,6 +155,20 @@ export interface SessionResponse {
   // node_state.last_feedback, which the backend clears when a failing grade queues a regenerated
   // lesson — without this the learner would never see the score that failed them.
   grade_result?: GradeResult | null;
+}
+
+export interface FollowUpQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  default: number;
+}
+
+export interface FollowUpResponse {
+  questions: FollowUpQuestion[];
+  detected_domain: string;
+  detected_language: string | null;
+  detected_specialization: string | null;
 }
 
 export interface IngestResponse {

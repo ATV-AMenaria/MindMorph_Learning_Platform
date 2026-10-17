@@ -16,8 +16,8 @@ export function GradeResult({ result }: { result: GradeResultT }) {
           Not graded — the exercise&apos;s auto-grading tests are broken on our side.
         </p>
         <p className="mt-2 text-sm text-text-muted">
-          Your submission was not scored and your progress is unchanged. Reopen the lesson to get a
-          fresh exercise.
+          Your submission was not scored and your progress is unchanged. The exercise&apos;s tests
+          need to be repaired before this submission can be graded.
         </p>
         {(result.failures ?? []).map((f, i) => (
           <pre key={i} className="mt-2 overflow-x-auto rounded-lg bg-ink-900 p-3 text-xs text-text-muted">

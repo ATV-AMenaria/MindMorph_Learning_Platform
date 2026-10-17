@@ -8,6 +8,13 @@
 
 **Status legend:** ✅ Done · 🟡 Partial / stub · ⛔ Planned (not in code)
 
+**Grading repair verified 16 October 2026:** Python, Node.js JavaScript and SQLite SQL execution
+are implemented. Windows and Ubuntu backend verification: **385 passed, 3 real-database checks skipped on each**;
+Final runner regressions: **93 passed on each platform**, including path names with spaces.
+Playwright: **44 passed**; type checking and a clean production build passed. The working-tree
+repair is not committed or deployed. See [Code Audit 2](../CODE_AUDIT_2.md) for the before/after
+results and the broader findings that remain outside this repair.
+
 ---
 
 ## 1. Current Architecture vs Target
@@ -65,7 +72,7 @@ but nothing exports them to a metrics backend (see roadmap below).
 |---|---|---|---|
 | Format Selector / GitHub / Blog / Dataset agents | ✅ | `agents/exercise/format_selector_agent.py`, `graph/exercise_graph.py` | LangGraph Exercise DAG: format selector → [GitHub MCP \| Blog (ddgs) \| Dataset (ddgs links)] fan-in. EXERCISE route now live (no more placeholder). |
 | Synthesizer / Grading Setup (unit tests + rubric) | ✅ | `agents/exercise/exercise_synthesizer_agent.py`, `agents/exercise/grader_agent.py` | Synthesizer personalizes; Grader emits unit tests (coding) or rubric (case study). |
-| **Live auto-grading** | ✅ | `tools/code_executor.py`, `grader_agent.grade_submission` | Coding → runs submission against tests in an isolated subprocess (self-contained runner, no pytest dep; hang-guard, not a sandbox). Case study → LLM rubric scoring. Wired into `POST /sessions/{user}/{session}/grade` (the Streamlit Grade button is gone with `app.py`). |
+| **Live auto-grading** | ✅ | `tools/code_executor.py`, `grader_agent.grade_submission` | Python lightweight runner (sync/async, no pytest dependency in child), Node.js 20 native test runner (existing suites and exported test functions), SQLite schema/data exercises. SQL assertions share one validated JSON-array contract; verification queries are read-only. Empty, malformed, fixture-dependent or generator artifacts cannot earn credit. Separate result files, process exit checks and bounded diagnostics prevent stdout-based or unfinished-test grades. Harness defects leave mastery unchanged. Local hang-guard, not a security sandbox. |
 
 ## 5. Status by Architecture Layer
 
@@ -75,7 +82,7 @@ but nothing exports them to a metrics backend (see roadmap below).
 | Application Service | 🟡 | **FastAPI** (`api/`) exposes the loop over HTTP; agents + LangSmith prompt registry exist. Still **no** Celery, gateway, rate limiting. |
 | AI / LLM | 🟡 | **LangGraph** orchestration ✅ (CrewAI is a non-goal — parallel LangGraph nodes cover it). Grounding: live web (DuckDuckGo) **+ opt-in local RAG** (FastEmbed + InMemoryVectorStore, `rag/`) in the Content dual-path. **Groq key-pool → local-Ollama provider chain** ✅ (`config.get_chat_model`, `llm_providers.ProviderChain`) — keys optional; zero-key clones run entirely on local Ollama. **Eval pipeline** 🟡 — offline content-groundedness LLM-judge (`evals/`, `python -m evals.run`). **Prompt Registry**: ✅ via `prompts/prompt_registry_wrapper_method.py` (LangSmith). |
 | Data | 🟡 | **PostgreSQL** ✅ — learning sessions (JSONB, #6) + per-user RAG vectors (**pgvector**, #9). Still **no** Redis/S3/Kafka. |
-| Infrastructure | ⛔ | No K8s/Terraform/Prometheus/CI-CD. |
+| Infrastructure | 🟡 | Test CI exists: Python suite on Windows/Linux with Node.js, plus Playwright. No deployment pipeline, K8s/Terraform or Prometheus. |
 | Analytics & Continuous Improvement | ⛔ | No telemetry pipeline, warehouse, or human-review loop. |
 | LLM Ops & Production | 🟡 | Provider chain (Groq pool → Ollama) ✅ + content-groundedness eval ✅ (`evals/`) + **token/cost accounting** 🟡 (`services/cost.py` `TokenMeter`, priced per model, on the lesson-compose path only — see Cross-cutting) + **latency observability** 🟡 (`services/timing.py` wall-clock spans on the graph / lesson / grade paths — log lines plus a dict on the session payload; no metrics backend or exporter, see Cross-cutting). Still **no** deployment pipeline. |
 | Security & Governance | ⛔ | No auth/RBAC/encryption/PII scrubbing. Only `.env` secrets + `.gitignore`. |
@@ -91,7 +98,7 @@ but nothing exports them to a metrics backend (see roadmap below).
 | Skill graph renderer | ✅ | `graph/skill_graph_render.py` | Deterministic SkillGraph JSON → Mermaid. |
 | LLM config | ✅ | `config.py` | Groq `openai/gpt-oss-120b` / local Ollama `qwen2.5:7b`\|`:14b`, temp 0.1. `GROQ_API_KEYS` (comma-separated pool) is optional and validated nowhere — absent/empty simply selects the Ollama path. |
 | Next.js frontend | ✅ | `web/` | SCOUT skill-graph + CONTENT dual-path, Mermaid render, lesson view, grading. Legacy Streamlit `app.py` **retired** (P3 #12) — it no longer exists in the repo. |
-| Tests | 🟡 | `tests/`, `web/tests/` | pytest: 268 passed, 3 skipped across 30 files (graph routing/fan-in, content dual-path, skill-graph render + dangling-edge prune, RAG/ingestion/pgvector, assessment, tutor chat, provider-chain rotation/fallback, cost/usage, stage timing, GitHub query normalisation, funnel events, import guards). Playwright: 30 passed across 5 specs (mocked-API E2E loop + lock gate, dagre layout/camera framing, Mermaid sanitise + containment, lock-message labels). |
+| Tests | 🟡 | `tests/`, `web/tests/` | 16 October verification: pytest **385 passed, 3 DB-gated checks skipped on each of Windows and Ubuntu**, across 35 files; Playwright **44 passed** across 7 specs. Includes real Python/JS/SQL runner regressions and HTTP grading/mastery checks, plus existing graph/RAG/provider/assessment/tutor/observability tests. Type checking and clean production build pass. Real DB durability and live AI quality remain separate checks. |
 
 ---
 
@@ -185,9 +192,12 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
      (`generate_content(..., context=ls["summary"])` threaded route→lesson→content graph), so a generic
      prerequisite like "Programming Fundamentals" is taught in the path's language (JavaScript for a MERN
      path, not Python). Verified live (MERN ctx → JS, Python ctx → Python).
-   - **Exercise language caveat:** the auto-grader executes **Python only**, so the format-selector routes
-     non-Python skills (JS/React/Node/SQL, conceptual) to **`case_study`** (rubric-graded prose) — a MERN
-     node gets a written exercise, not a Python one. A real JS/Node execution harness is future work.
+   - **Exercise languages:** executable challenges support **Python, JavaScript (Node.js 20), and
+     SQLite SQL**. Aliases (`py`, `js`, `node`, `sqlite`) normalize before routing. The cached exercise
+     language must agree with its grading artifact; explicit unsupported execution languages never
+     silently use Python. Other languages/conceptual exercises use `case_study`. SQL currently means
+     learner-provided schema/data followed by verification SELECTs; query-only seeded-table exercises
+     are not implemented. Broader learner-profile/content/example language wiring remains partial.
 9. ✅ **User material ingestion** — `POST /users/{user_id}/knowledge` (multipart PDF) → **PyMuPDF**
    extract (`rag/pdf.py`) → chunk → **per-user** RAG store (`rag/registry.py`), keyed by user_id, with a
    **web upload UI** (`web/components/KnowledgeUpload.tsx`). The content graph resolves the retriever
@@ -226,11 +236,13 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
     *Satisfies:* §5.5, §5.6, §5.8.
 
 ### Cross-cutting
-- 🟡 **Test suite** — pytest (`tests/`, 268 passed, 3 skipped: graph routing/fan-in, content dual-path, skill-graph
+- 🟡 **Test suite** — pytest (`tests/`, 385 passed, 3 DB-gated skips on Windows and Ubuntu, verified 16 October 2026: graph routing/fan-in, content dual-path, skill-graph
   render + dangling-edge prune, RAG/ingestion/pgvector, assessment, tutor chat, provider-chain rotation/fallback,
   cost/usage accounting, stage timing, GitHub query normalisation, funnel events, import guards) plus Playwright
-  (`web/tests/`, 30 passed: mocked-API E2E loop + lock gate, dagre layout/camera framing, Mermaid sanitise +
-  containment, lock-message labels). Growing.
+  (`web/tests/`, 44 passed: mocked-API E2E loop + lock gate, onboarding/summary navigation, actual Monaco
+  JS/SQL language checks, harness-error feedback, dagre framing, Mermaid containment and lock labels).
+  Real runner regressions additionally cover async failures, empty tests, legacy artifacts, SQL
+  assertion validation, language disagreement, spoofed stdout, bounded errors and descendant cleanup.
 - 🟡 **Funnel instrumentation (Gate-1)** — `services/events.py` appends a structured event to an
   append-only `learning_session["events"]` timeline at every loop chokepoint (`session_created`,
   `assessment_submitted`, `lesson_opened`, `exercise_graded`, `node_mastered`/`needs_review`,

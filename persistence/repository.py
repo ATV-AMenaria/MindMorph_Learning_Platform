@@ -43,87 +43,100 @@ class LearningSessionRepository(ABC):
 
 
 class PostgresLearningSessionRepository(LearningSessionRepository):
-    """Production store: one JSONB row per session. SQLAlchemy/Postgres imports are done lazily so
-    importing this module (e.g. for the in-memory store, or in tests) needs no live database."""
+    """Production store: one JSONB row per session. Fallback to in-memory store if Postgres is unreachable."""
 
     def get(self, user_id: str, session_id: str) -> Optional[dict]:
-        from persistence.db import get_sessionmaker
-        from persistence.models import LearningSessionRow
+        try:
+            from persistence.db import get_sessionmaker
+            from persistence.models import LearningSessionRow
 
-        with get_sessionmaker()() as session:
-            row = session.get(LearningSessionRow, (user_id, session_id))
-            return dict(row.data) if row is not None else None
+            with get_sessionmaker()() as session:
+                row = session.get(LearningSessionRow, (user_id, session_id))
+                return dict(row.data) if row is not None else None
+        except Exception as e:
+            logger.warning("Postgres get failed (%s); falling back to in-memory store", e)
+            return _memory_singleton.get(user_id, session_id)
 
     def save(self, user_id: str, session_id: str, ls: dict, title: Optional[str] = None) -> None:
-        # Postgres upsert: insert the blob, or overwrite ``data`` on (user_id, session_id) conflict.
-        # On update we always refresh data + updated_at; ``title`` is only overwritten when a non-empty
-        # one is supplied, so a later save() that omits the title never wipes the existing one.
-        from sqlalchemy import func
-        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        try:
+            from sqlalchemy import func
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-        from persistence.db import get_sessionmaker
-        from persistence.models import LearningSessionRow
+            from persistence.db import get_sessionmaker
+            from persistence.models import LearningSessionRow
 
-        stmt = pg_insert(LearningSessionRow).values(
-            user_id=user_id, session_id=session_id, data=ls, title=title or "",
-            created_at=func.now(), updated_at=func.now(),
-        )
-        update_set = {"data": stmt.excluded.data, "updated_at": func.now()}
-        if title:
-            update_set["title"] = stmt.excluded.title
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["user_id", "session_id"], set_=update_set
-        )
-        with get_sessionmaker()() as session:
-            session.execute(stmt)
-            session.commit()
-        logger.info("persistence: saved session %s/%s", user_id, session_id)
+            stmt = pg_insert(LearningSessionRow).values(
+                user_id=user_id, session_id=session_id, data=ls, title=title or "",
+                created_at=func.now(), updated_at=func.now(),
+            )
+            update_set = {"data": stmt.excluded.data, "updated_at": func.now()}
+            if title:
+                update_set["title"] = stmt.excluded.title
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["user_id", "session_id"], set_=update_set
+            )
+            with get_sessionmaker()() as session:
+                session.execute(stmt)
+                session.commit()
+            logger.info("persistence: saved session %s/%s", user_id, session_id)
+        except Exception as e:
+            logger.warning("Postgres save failed (%s); falling back to in-memory store", e)
+            _memory_singleton.save(user_id, session_id, ls, title)
 
     def list_sessions(self, user_id: str) -> list[dict]:
-        from sqlalchemy import select
+        try:
+            from sqlalchemy import select
 
-        from persistence.db import get_sessionmaker
-        from persistence.models import LearningSessionRow
+            from persistence.db import get_sessionmaker
+            from persistence.models import LearningSessionRow
 
-        with get_sessionmaker()() as session:
-            rows = session.execute(
-                select(LearningSessionRow)
-                .where(LearningSessionRow.user_id == user_id)
-                .order_by(LearningSessionRow.updated_at.desc())
-            ).scalars().all()
-            return [
-                {
-                    "session_id": r.session_id,
-                    "title": r.title,
-                    "updated_at": r.updated_at.isoformat() if r.updated_at else None,
-                }
-                for r in rows
-            ]
+            with get_sessionmaker()() as session:
+                rows = session.execute(
+                    select(LearningSessionRow)
+                    .where(LearningSessionRow.user_id == user_id)
+                    .order_by(LearningSessionRow.updated_at.desc())
+                ).scalars().all()
+                return [
+                    {
+                        "session_id": r.session_id,
+                        "title": r.title,
+                        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+                    }
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.warning("Postgres list_sessions failed (%s); falling back to in-memory store", e)
+            return _memory_singleton.list_sessions(user_id)
 
     def delete(self, user_id: str, session_id: str) -> None:
-        from persistence.db import get_sessionmaker
-        from persistence.models import LearningSessionRow
+        try:
+            from persistence.db import get_sessionmaker
+            from persistence.models import LearningSessionRow
 
-        with get_sessionmaker()() as session:
-            row = session.get(LearningSessionRow, (user_id, session_id))
-            if row is not None:
-                session.delete(row)
-                session.commit()
+            with get_sessionmaker()() as session:
+                row = session.get(LearningSessionRow, (user_id, session_id))
+                if row is not None:
+                    session.delete(row)
+                    session.commit()
+        except Exception as e:
+            logger.warning("Postgres delete failed (%s); falling back to in-memory store", e)
+            _memory_singleton.delete(user_id, session_id)
 
     def list_all(self) -> list[tuple[str, str, dict]]:
-        from sqlalchemy import select
+        try:
+            from sqlalchemy import select
 
-        from persistence.db import get_sessionmaker
-        from persistence.models import LearningSessionRow
+            from persistence.db import get_sessionmaker
+            from persistence.models import LearningSessionRow
 
-        # Bounded: this materializes full JSONB blobs in memory, so cap it (operator/analytics use at
-        # prototype scale). A real analytics path would page or stream; if the cap is hit the
-        # /admin/funnel aggregate is a lower bound — fine for Gate-1 directional signal.
-        with get_sessionmaker()() as session:
-            rows = (
-                session.execute(select(LearningSessionRow).limit(LIST_ALL_LIMIT)).scalars().all()
-            )
-            return [(r.user_id, r.session_id, dict(r.data)) for r in rows]
+            with get_sessionmaker()() as session:
+                rows = (
+                    session.execute(select(LearningSessionRow).limit(LIST_ALL_LIMIT)).scalars().all()
+                )
+                return [(r.user_id, r.session_id, dict(r.data)) for r in rows]
+        except Exception as e:
+            logger.warning("Postgres list_all failed (%s); falling back to in-memory store", e)
+            return _memory_singleton.list_all()
 
 
 class InMemoryLearningSessionRepository(LearningSessionRepository):
@@ -138,6 +151,7 @@ class InMemoryLearningSessionRepository(LearningSessionRepository):
 
     def __init__(self) -> None:
         self._store: dict[tuple[str, str], dict] = {}
+        self._save_sequence = 0
 
     def get(self, user_id: str, session_id: str) -> Optional[dict]:
         row = self._store.get((user_id, session_id))
@@ -147,17 +161,19 @@ class InMemoryLearningSessionRepository(LearningSessionRepository):
         key = (user_id, session_id)
         existing = self._store.get(key)
         kept_title = existing["title"] if (existing and not title) else (title or "")
+        self._save_sequence += 1
         self._store[key] = {
             "data": json.dumps(ls),  # raises TypeError on any non-JSON-serializable value (like JSONB)
             "title": kept_title,
             "updated_at": datetime.now(timezone.utc),
+            "save_sequence": self._save_sequence,
         }
 
     def list_sessions(self, user_id: str) -> list[dict]:
         rows = [
             (sid, row) for (uid, sid), row in self._store.items() if uid == user_id
         ]
-        rows.sort(key=lambda t: t[1]["updated_at"], reverse=True)
+        rows.sort(key=lambda t: (t[1]["updated_at"], t[1]["save_sequence"]), reverse=True)
         return [
             {"session_id": sid, "title": row["title"], "updated_at": row["updated_at"].isoformat()}
             for sid, row in rows

@@ -47,6 +47,7 @@ _lesson_graph = None
 _adaptation_agent = None
 _assessment_agent = None
 _tutor_agent = None
+_followup_agent = None
 
 
 def _run_async(coro):
@@ -108,6 +109,22 @@ def _get_assessment_agent():
     return _assessment_agent
 
 
+def _get_followup_agent():
+    global _followup_agent
+    if _followup_agent is None:
+        from agents.followup.followup_agent import FollowUpAgent
+
+        _followup_agent = FollowUpAgent(push_to_langsmith=False)
+    return _followup_agent
+
+
+def generate_followup(query: str) -> dict | None:
+    """Run the follow-up agent to generate clarifying questions."""
+    agent = _get_followup_agent()
+    result = agent.analyze(query)
+    return result.model_dump() if result else None
+
+
 def _run_assessment(skill_graph: dict) -> Optional[dict]:
     """Generate the diagnostic MCQ quiz for a new path. Best-effort: any failure returns None so path
     creation never fails on the assessment (the frontend then just shows the graph directly)."""
@@ -130,7 +147,14 @@ class LockedNodeError(Exception):
         super().__init__(f"Node {node_id!r} is locked; complete first: {', '.join(pending)}")
 
 
-def new_learning_session(final_state: dict, format_type: str) -> Optional[dict]:
+def new_learning_session(
+    final_state: dict, 
+    format_type: str,
+    preferences: Optional[dict] = None,
+    primary_language: Optional[str] = None,
+    scope: Optional[str] = None,
+    domain: Optional[str] = None,
+) -> Optional[dict]:
     """Build a fresh ``learning_session`` dict from a SCOUT orchestration result.
 
     Returns ``None`` when no skill graph / nodes were produced. Shape is identical to the original
@@ -157,6 +181,10 @@ def new_learning_session(final_state: dict, format_type: str) -> Optional[dict]:
         "chat": [],  # AI Teaching Assistant turns (P3 #10): list of {role, content}
         "usage": _empty_usage(),  # cost/cache accounting (unit-economics)
         "events": [],  # funnel timeline (Gate-1 observability)
+        "preferences": preferences,
+        "primary_language": primary_language,
+        "scope": scope,
+        "domain": domain,
     }
     record_event(ls, STAGES.SESSION_CREATED,
                  node_count=len(skill_graph["nodes"]), format_type=format_type)
@@ -184,7 +212,11 @@ STAGE_LABELS = {
 }
 
 
-def _route_final_state(final_state: dict, format_type: str, timing: Optional[dict] = None) -> dict:
+def _route_final_state(final_state: dict, format_type: str, timing: Optional[dict] = None,
+                       preferences: Optional[dict] = None,
+                       primary_language: Optional[str] = None,
+                       scope: Optional[str] = None,
+                       domain: Optional[str] = None) -> dict:
     """Shape a finished orchestration-graph state into ``{route, learning_session, final_content,
     exercise}``. Only the SCOUT route yields a persistable ``learning_session`` (the adaptive loop);
     CONTENT/EXERCISE are transient. Shared by ``start_session`` and ``astream_session`` so the
@@ -193,7 +225,7 @@ def _route_final_state(final_state: dict, format_type: str, timing: Optional[dic
     route = final_state.get("route", "UNKNOWN")
     out = {"route": route, "learning_session": None, "final_content": None, "exercise": None}
     if route == "SCOUT":
-        ls = new_learning_session(final_state, format_type)
+        ls = new_learning_session(final_state, format_type, preferences, primary_language, scope, domain)
         # Graph stages run before any session exists, so the spans are collected by the caller and
         # attached here — the one shaping point both the sync and streaming callers go through.
         # CONTENT/EXERCISE routes persist nothing, so their spans stay log-only.
@@ -212,7 +244,11 @@ def _route_final_state(final_state: dict, format_type: str, timing: Optional[dic
     return out
 
 
-def start_session(user_query: str, format_type: str = "B") -> dict:
+def start_session(user_query: str, format_type: str = "B",
+                  preferences: Optional[dict] = None,
+                  primary_language: Optional[str] = None,
+                  scope: Optional[str] = None,
+                  domain: Optional[str] = None) -> dict:
     """Run the orchestration graph for a query and return the routed payload.
 
     Returns ``{"route", "learning_session", "final_content", "exercise"}``. Only the SCOUT route
@@ -221,12 +257,22 @@ def start_session(user_query: str, format_type: str = "B") -> dict:
     logger.info("service: start_session (query=%r, format=%s)", user_query, format_type)
     with collect() as spans, span("graph.total"):
         final_state = _run_async(
-            _get_orchestration_graph().ainvoke({"user_query": user_query, "format_type": format_type})
+            _get_orchestration_graph().ainvoke({
+                "user_query": user_query, 
+                "format_type": format_type,
+                "preferences": preferences,
+                "primary_language": primary_language,
+                "scope": scope
+            })
         )
-    return _route_final_state(final_state, format_type, spans_payload(spans))
+    return _route_final_state(final_state, format_type, spans_payload(spans), preferences, primary_language, scope, domain)
 
 
-async def astream_session(user_query: str, format_type: str = "B"):
+async def astream_session(user_query: str, format_type: str = "B",
+                          preferences: Optional[dict] = None,
+                          primary_language: Optional[str] = None,
+                          scope: Optional[str] = None,
+                          domain: Optional[str] = None):
     """Async-native, streaming twin of ``start_session``.
 
     Runs the SAME compiled orchestration graph via ``.astream(..., stream_mode="updates")`` on the
@@ -241,12 +287,18 @@ async def astream_session(user_query: str, format_type: str = "B"):
     final_state: dict = {}
     with collect() as spans, span("graph.total"):
         async for update in _get_orchestration_graph().astream(
-            {"user_query": user_query, "format_type": format_type}, stream_mode="updates"
+            {
+                "user_query": user_query, 
+                "format_type": format_type,
+                "preferences": preferences,
+                "primary_language": primary_language,
+                "scope": scope
+            }, stream_mode="updates"
         ):
             for node_name, node_output in update.items():
                 final_state.update(node_output or {})
                 yield {"stage": node_name, "label": STAGE_LABELS.get(node_name, node_name)}
-    yield {"result": _route_final_state(final_state, format_type, spans_payload(spans))}
+    yield {"result": _route_final_state(final_state, format_type, spans_payload(spans), preferences, primary_language, scope, domain)}
 
 
 def _run_lesson(
@@ -255,6 +307,7 @@ def _run_lesson(
     prior_weaknesses: list,
     user_id: Optional[str] = None,
     path_context: Optional[str] = None,
+    primary_language: Optional[str] = None,
 ) -> tuple[dict, dict]:
     """Invoke the lesson graph for one skill node (content + embedded exercise).
 
@@ -272,6 +325,7 @@ def _run_lesson(
                 "prior_weaknesses": prior_weaknesses,
                 "user_id": user_id,
                 "path_context": path_context,
+                "primary_language": primary_language,
             },
             config={"callbacks": [meter]},
         )
@@ -309,9 +363,12 @@ def open_lesson(ls: dict, node_id: str, user_id: Optional[str] = None) -> dict:
         prior_weaknesses = ls["node_state"].get(node_id, {}).get("weaknesses", [])
         logger.info("service: composing lesson for node %s", node_id)
         with collect() as spans, span("lesson.total"):
+            lesson_kwargs = {"path_context": ls.get("summary")}
+            if ls.get("primary_language") is not None:
+                lesson_kwargs["primary_language"] = ls.get("primary_language")
             out, lesson_usage = _run_lesson(
                 node, ls.get("format_type", "B"), prior_weaknesses, user_id,
-                path_context=ls.get("summary"),
+                **lesson_kwargs
             )
         ls["lessons"][node_id] = {
             "content": out.get("content"),
@@ -429,7 +486,12 @@ def grade(ls: dict, node_id: str, solution: str) -> tuple[dict, list[str], dict 
     new_node_ids: list[str] = []
     with collect() as spans:
         with span(exec_stage):
-            result = grade_submission(fmt, solution, artifact)
+            # Older sessions have no explicit exercise language. Keep their Python default while
+            # checking declared languages against the saved artifact before executing learner code.
+            grade_kwargs = {}
+            if exercise.get("language"):
+                grade_kwargs["expected_language"] = exercise["language"]
+            result = grade_submission(fmt, solution, artifact, **grade_kwargs)
         if result is not None and result.get("harness_error"):
             # The generated grading harness is broken — the learner's submission was never actually
             # measured. Log loudly and record it as a GRADE failure, not an exercise result: no
@@ -482,21 +544,34 @@ def grade_assessment(ls: dict, answers: list[int]) -> dict:
         raise ValueError(f"Expected {len(questions)} answers, got {len(answers)}.")
 
     correct = 0
+    results = []
     for q, ans in zip(questions, answers):
-        if ans != q.get("correct_index"):
+        is_correct = (ans == q.get("correct_index"))
+        results.append({
+            "question_id": q.get("id"),
+            "chosen_index": ans,
+            "correct_index": q.get("correct_index"),
+            "explanation": q.get("explanation"),
+            "is_correct": is_correct
+        })
+        
+        if not is_correct:
             continue  # wrong or skipped (-1) → leave node available
         node_id = q.get("node_id")
-        # Guard: the LLM-supplied node_id must be a real node, else apply_score would create a phantom
+        # Guard: the LLM-supplied node_id must be a real node, else it would create a phantom
         # node_state entry and corrupt the complete/total counter.
         if node_id not in ls["node_state"]:
             logger.warning("assessment: skipping unknown node_id %r from quiz", node_id)
             continue
-        apply_score(ls, node_id, "mcq_assessment", {
-            "score": ASSESSMENT_PASS_SCORE,
-            "feedback": "Head-start from the diagnostic assessment — confirm with the exercise to master.",
-        })
+        old_st = ls["node_state"][node_id]
+        ls["node_state"][node_id] = {
+            **old_st,
+            "status": "in_progress",
+            "best_score": max(old_st.get("best_score", 0), ASSESSMENT_PASS_SCORE),
+        }
         correct += 1
     assessment["submitted"] = True
+    assessment["results"] = results
     record_event(ls, STAGES.ASSESSMENT_SUBMITTED, total=len(questions), correct=correct)
     return ls
 

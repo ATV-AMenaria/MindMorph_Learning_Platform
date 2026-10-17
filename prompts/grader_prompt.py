@@ -22,8 +22,10 @@ For a coding_challenge with language = 'python':
       * Declare EVERY import you use at the TOP of the first list element, in the test module itself
         (e.g. `import pandas as pd`) — nothing is imported for you, and an undeclared name makes
         every test fail regardless of what the learner wrote.
-  - CRITICAL: pytest only collects `def test_*` functions. Do NOT emit bare module-level `assert`
-    statements outside a test function — they will not be collected and grading will report 0 tests.
+  - Use `def test_*` functions so each check is counted independently. For async solutions, use
+    `async def test_*` and await the solution. The runner awaits returned awaitables.
+  - Tests run in a lightweight runner, not pytest. Test functions must take no required arguments.
+    Do not use pytest fixtures, parametrization decorators, or generator/yield test functions.
   - Do NOT include the reference implementation — only the tests.
 - Leave `rubric` and `sql_assertions` empty.
 
@@ -44,6 +46,8 @@ For a coding_challenge with language = 'javascript':
   - SELF-CONTAINED: The tests run in a bare Node.js process — no npm packages, no browser APIs,
     no `fetch`, no `fs` reads. Build all inputs as inline literals.
   - Assertions: use `assert.strictEqual`, `assert.deepStrictEqual`, `assert.throws`, etc.
+  - For asynchronous solutions, use async test callbacks and await every assertion/solution call.
+    Do not skip tests or mark them TODO; those checks earn no credit.
   - Do NOT include the reference implementation — only the tests.
 - Leave `rubric` and `sql_assertions` empty.
 

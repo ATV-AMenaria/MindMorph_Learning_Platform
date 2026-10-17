@@ -27,6 +27,7 @@ from agents.exercise.format_selector_agent import FormatSelectorAgent
 from agents.exercise.exercise_synthesizer_agent import ExerciseSynthesizerAgent
 from agents.exercise.grader_agent import GraderAgent
 from agents.factual.factual_agent import FactualAgent
+from tools.grading_contract import normalize_language
 
 
 class ExerciseState(TypedDict, total=False):
@@ -39,6 +40,7 @@ class ExerciseState(TypedDict, total=False):
     dataset_material: Optional[str]
     exercise_statement: Optional[str]
     grading_artifact: Optional[dict]
+    primary_language: Optional[str]
 
 
 def build_exercise_graph(
@@ -71,13 +73,30 @@ def build_exercise_graph(
 
     def format_selector_node(state: ExerciseState) -> dict:
         result = format_selector.select_format(state["user_query"])
+        primary = state.get("primary_language")
+        
         if not result:
-            # Degrade to a coding challenge by default so the pipeline still produces an exercise.
-            return {"exercise_format": "coding_challenge", "exercise_language": "python",
-                    "format_reasoning": None}
-        return {"exercise_format": result.format,
-                "exercise_language": result.language or "python",
-                "format_reasoning": result.reasoning}
+            fmt = "coding_challenge"
+            lang = primary or "python"
+            reason = None
+        else:
+            fmt = result.format
+            lang = primary or result.language or "python"
+            reason = result.reasoning
+            
+        # The editor, saved artifact and execution router share the same canonical identifiers.
+        # Unsupported languages remain prose exercises rather than silently executing Python.
+        if fmt == "coding_challenge":
+            try:
+                lang = normalize_language(lang)
+            except ValueError:
+                fmt, lang = "case_study", None
+        else:
+            lang = None
+
+        return {"exercise_format": fmt,
+                "exercise_language": lang,
+                "format_reasoning": reason}
 
     async def github_node(state: ExerciseState) -> dict:
         query = f"{state['user_query']} example projects"

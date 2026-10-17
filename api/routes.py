@@ -18,6 +18,8 @@ from api.schemas import (
     ChatRequest,
     CreateSessionRequest,
     FlagRequest,
+    FollowUpRequest,
+    FollowUpResponse,
     GradeRequest,
     IngestResponse,
     SessionMeta,
@@ -30,6 +32,7 @@ from services.learning_service import (
     LockedNodeError,
     astream_session,
     build_tutor_messages,
+    generate_followup,
     grade,
     grade_assessment,
     open_lesson,
@@ -58,11 +61,33 @@ def _load_or_404(repo, user_id: str, session_id: str) -> dict:
     return ls
 
 
+@router.post("/sessions/followup", response_model=FollowUpResponse)
+def get_followup_questions(req: FollowUpRequest) -> FollowUpResponse:
+    """Generate follow-up questions before creating a session."""
+    try:
+        result = generate_followup(req.query)
+        if not result:
+            raise ValueError("Failed to generate follow-up questions")
+    except Exception as e:
+        raise _service_unavailable("followup", e)
+    return FollowUpResponse(**result)
+
+
 @router.post("/sessions", response_model=StartSessionResponse)
 def create_session(req: CreateSessionRequest) -> StartSessionResponse:
     """Run orchestration for a query. Only the SCOUT route yields a persisted learning_session."""
+    extra = {}
+    if req.preferences is not None:
+        extra["preferences"] = req.preferences
+    if req.primary_language is not None:
+        extra["primary_language"] = req.primary_language
+    if req.scope is not None:
+        extra["scope"] = req.scope
+    if req.domain is not None:
+        extra["domain"] = req.domain
+
     try:
-        result = start_session(req.query, req.format_type)
+        result = start_session(req.query, req.format_type, **extra)
     except Exception as e:
         raise _service_unavailable("start_session", e)
     resp = StartSessionResponse(
@@ -84,9 +109,19 @@ async def create_session_stream(req: CreateSessionRequest) -> StreamingResponse:
     """Streaming twin of ``POST /sessions``: SSE progress (one frame per LangGraph node) instead of
     one ~60s blocking wait. Terminal frame carries the same payload shape the sync route returns."""
 
+    extra = {}
+    if req.preferences is not None:
+        extra["preferences"] = req.preferences
+    if req.primary_language is not None:
+        extra["primary_language"] = req.primary_language
+    if req.scope is not None:
+        extra["scope"] = req.scope
+    if req.domain is not None:
+        extra["domain"] = req.domain
+
     async def gen():
         try:
-            async for evt in astream_session(req.query, req.format_type):
+            async for evt in astream_session(req.query, req.format_type, **extra):
                 if "result" not in evt:
                     yield _sse({"stage": evt["stage"], "label": evt["label"]})
                     continue

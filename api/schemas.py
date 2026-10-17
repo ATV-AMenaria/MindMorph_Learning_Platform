@@ -13,6 +13,21 @@ class CreateSessionRequest(BaseModel):
     user_id: str = Field(..., min_length=1)
     query: str = Field(..., min_length=1)
     format_type: str = "B"
+    preferences: Optional[dict] = None
+    primary_language: Optional[str] = None
+    scope: Optional[str] = None
+    domain: Optional[str] = None
+
+
+class FollowUpRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+
+
+class FollowUpResponse(BaseModel):
+    questions: list[dict]
+    detected_domain: str
+    detected_language: Optional[str] = None
+    detected_specialization: Optional[str] = None
 
 
 class GradeRequest(BaseModel):

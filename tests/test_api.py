@@ -52,7 +52,7 @@ def client(monkeypatch):
     # start_session returns a SCOUT result with a fresh learning_session (no orchestration graph).
     monkeypatch.setattr(
         routes, "start_session",
-        lambda query, fmt: {"route": "SCOUT", "learning_session": _scout_ls(),
+        lambda query, fmt="B", **kwargs: {"route": "SCOUT", "learning_session": _scout_ls(),
                             "final_content": None, "exercise": None},
     )
 
@@ -244,7 +244,7 @@ def test_grade_sub40_adds_remedial_node_and_locks_via_http(monkeypatch):
 
     monkeypatch.setattr(
         routes, "start_session",
-        lambda query, fmt: {"route": "SCOUT", "learning_session": _scout_ls(),
+        lambda query, fmt="B", **kwargs: {"route": "SCOUT", "learning_session": _scout_ls(),
                             "final_content": None, "exercise": None},
     )
     # Stub the lesson-compose LLM boundary only; open_lesson/grade themselves run for real.

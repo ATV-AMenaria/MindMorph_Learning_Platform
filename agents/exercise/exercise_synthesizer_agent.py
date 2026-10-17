@@ -67,19 +67,15 @@ class ExerciseSynthesizerAgent:
         logger.info(
             "ExerciseSynthesizer: composing %s exercise for %r", exercise_format, user_query
         )
-        try:
-            messages = self.chat_prompt.format_messages(
-                user_query=user_query,
-                exercise_format=exercise_format,
-                exercise_language=exercise_language or "(not applicable)",
-                github_material=github_material or _NONE,
-                blog_material=blog_material or _NONE,
-                dataset_material=dataset_material or _NONE,
-            )
-            return self.llm.invoke(messages).content
-        except Exception:
-            logger.exception("ExerciseSynthesizer: error composing exercise")
-            return None
+        messages = self.chat_prompt.format_messages(
+            user_query=user_query,
+            exercise_format=exercise_format,
+            exercise_language=exercise_language or "(not applicable)",
+            github_material=github_material or _NONE,
+            blog_material=blog_material or _NONE,
+            dataset_material=dataset_material or _NONE,
+        )
+        return self.llm.invoke(messages).content
 
 
 if __name__ == "__main__":

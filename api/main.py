@@ -33,6 +33,24 @@ app.add_middleware(
 app.include_router(router)
 
 
+@app.on_event("startup")
+def startup_create_tables():
+    """Auto-create tables from ORM models on startup (idempotent).
+
+    Only runs when the active store is Postgres (the default). Lazy import so the
+    in-memory path never needs a live database connection.
+    """
+    if os.getenv("MINDMORPH_STORE", "postgres").lower() == "memory":
+        return
+    try:
+        from persistence.db import create_all
+
+        create_all()
+        logger.info("startup: database tables verified/created")
+    except Exception:
+        logger.warning("startup: could not verify DB tables — is PostgreSQL running?")
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "store": os.getenv("MINDMORPH_STORE", "postgres")}

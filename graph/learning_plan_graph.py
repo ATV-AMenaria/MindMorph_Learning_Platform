@@ -45,6 +45,9 @@ class LearningPlanState(TypedDict, total=False):
     format_type: str
     route: str
     reasoning: str
+    preferences: Optional[dict]
+    primary_language: Optional[str]
+    scope: Optional[str]
     # Learning-plan branch
     scout_queries: dict
     academic_output: Optional[str]
@@ -234,12 +237,21 @@ def build_graph(
                 "(job scrape returned nothing or timed out) — skill graph built from Academic + Practical only",
                 state["user_query"],
             )
+        scope_instruction = ""
+        scope = state.get("scope")
+        lang = state.get("primary_language") or "the detected language"
+        if scope == "focused":
+            scope_instruction = f"The learner wants a FOCUSED path: only include topics directly relevant to their domain. Use {lang} for all code examples. Do NOT include foundational CS topics in other languages."
+        elif scope == "foundation":
+            scope_instruction = "The learner wants a STRONG FOUNDATION path: start with universal CS fundamentals, then specialize. Include cross-language concepts."
+
         with span("graph.consensus"):
             sg = consensus.build_skill_graph(
                 state["user_query"],
                 state.get("academic_output"),
                 market_text,
                 state.get("practical_output"),
+                scope_instruction=scope_instruction,
             )
         if not sg:
             return {"skill_graph": None, "skill_graph_mermaid": ""}

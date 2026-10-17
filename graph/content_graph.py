@@ -40,6 +40,7 @@ class ContentState(TypedDict, total=False):
     format_type: str          # 'A' Boost | 'B' Builder | 'C' Sprint
     prior_feedback: Optional[str]  # score-aware gap guidance; None = plain generation
     path_context: Optional[str]    # overall learning goal — keeps a node lesson in the path's language
+    primary_language: Optional[str]
     user_id: Optional[str]    # for per-user RAG retrieval (the user's ingested material)
     creative_draft: str
     factual_findings: Optional[str]
@@ -121,6 +122,7 @@ def build_content_graph(
                 state["user_query"], fmt,
                 remediation=state.get("prior_feedback"),
                 context=state.get("path_context"),
+                primary_language=state.get("primary_language"),
             )
         }
 
