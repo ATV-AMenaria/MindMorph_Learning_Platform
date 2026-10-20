@@ -12,8 +12,8 @@
 are implemented. Windows and Ubuntu backend verification: **385 passed, 3 real-database checks skipped on each**;
 Final runner regressions: **93 passed on each platform**, including path names with spaces.
 Playwright: **44 passed**; type checking and a clean production build passed. The working-tree
-repair is not committed or deployed. See [Code Audit 2](../CODE_AUDIT_2.md) for the before/after
-results and the broader findings that remain outside this repair.
+repair was committed as `b57c43b` on `feature/learning-flow-improvements`. These checks do not
+verify a deployment. Detailed audit and work records are kept as local-only documents.
 
 ---
 

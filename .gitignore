@@ -30,3 +30,8 @@ web/.live_e2e*.mjs
 
 # Code audit & onboarding doc (local, untracked)
 CODE_AUDIT.md
+
+# Local-only work records
+/CODE_AUDIT_2.md
+/RESOURCES_AND_WORKFLOW.md
+/CHANGES.md
