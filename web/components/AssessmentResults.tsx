@@ -42,7 +42,7 @@ export function AssessmentResults({ assessment, onContinue }: AssessmentResultsP
 
         <p className="max-w-xl mx-auto text-sm text-text-muted mt-2 leading-relaxed">
           {score > 0
-            ? `Great job! You already know ${score} foundational skill${score === 1 ? "" : "s"}. We've updated your roadmap so you don't repeat what you already know.`
+            ? `Great job! You already know ${score} foundational skill${score === 1 ? "" : "s"}. Correct answers give you a head-start. Complete each skill's exercise to demonstrate mastery.`
             : "Perfect! We've prepared a complete, step-by-step roadmap tailored for you starting right from the fundamentals."}
         </p>
 
@@ -69,7 +69,7 @@ export function AssessmentResults({ assessment, onContinue }: AssessmentResultsP
       {/* Questions review list */}
       <div className="space-y-4">
         {quiz.questions.map((q, qi) => {
-          const res = results.find((r) => r.question_id === q.node_id) || results[qi];
+          const res = q.id ? results.find((r) => r.question_id === q.id) : results[qi];
           if (!res) return null;
 
           return (

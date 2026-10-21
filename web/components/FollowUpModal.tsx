@@ -1,5 +1,6 @@
 import { FollowUpQuestion } from "@/lib/types";
 import { useState, useCallback } from "react";
+import { Modal } from "./Modal";
 
 interface FollowUpModalProps {
   questions: FollowUpQuestion[];
@@ -55,7 +56,7 @@ export function FollowUpModal({ questions, domain, onSubmit, onCancel, submittin
   const isFirst = currentStep === 0;
   const emoji = getDomainEmoji(domain);
 
-  const isOther = otherActive[current.id] ?? false;
+  const isOther = current ? otherActive[current.id] ?? false : false;
 
   const handleSelectPreset = (opt: string) => {
     setOtherActive({ ...otherActive, [current.id]: false });
@@ -88,9 +89,12 @@ export function FollowUpModal({ questions, domain, onSubmit, onCancel, submittin
     }
   }, [isFirst]);
 
+  if (!current) return <Modal label="Learning preferences" onEscape={onCancel} returnFocusId="generate-path">
+    <div className="p-6"><p>No questions are available.</p><button onClick={() => onSubmit({})}>Continue without questions</button></div>
+  </Modal>;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="surface w-full max-w-lg overflow-hidden rounded-2xl border border-white/10 shadow-2xl">
+    <Modal label="Learning preferences" onEscape={onCancel} returnFocusId="generate-path">
         {/* Progress bar */}
         <div className="h-1 w-full bg-ink-900/60">
           <div
@@ -236,7 +240,7 @@ export function FollowUpModal({ questions, domain, onSubmit, onCancel, submittin
               )}
               <button
                 type="button"
-                onClick={onCancel}
+                  onClick={() => onSubmit({})}
                 disabled={submitting}
                 className="rounded-xl px-4 py-2.5 text-sm font-medium text-text-muted hover:text-text transition-colors disabled:opacity-50"
               >
@@ -266,7 +270,6 @@ export function FollowUpModal({ questions, domain, onSubmit, onCancel, submittin
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

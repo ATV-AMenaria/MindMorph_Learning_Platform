@@ -29,7 +29,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     const detail = body?.detail;
-    if (res.status === 409) throw new LockedError(detail?.pending ?? []);
+    if (res.status === 409 && detail?.error === "locked") throw new LockedError(detail?.pending ?? []);
     // 503 (and friends) carry a safe string message — surface it verbatim for the UI to show.
     throw new Error(typeof detail === "string" ? detail : `Request failed (${res.status}).`);
   }
@@ -91,11 +91,11 @@ export const api = {
     );
   },
 
-  grade(userId: string, sessionId: string, nodeId: string, solution: string) {
+  grade(userId: string, sessionId: string, nodeId: string, solution: string, exerciseRevision?: string) {
     const q = new URLSearchParams({ node_id: nodeId }).toString();
     return req<SessionResponse>(
       `/sessions/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}/grade?${q}`,
-      { method: "POST", body: JSON.stringify({ solution }) },
+      { method: "POST", body: JSON.stringify({ solution, exercise_revision: exerciseRevision }) },
     );
   },
 

@@ -8,7 +8,7 @@ import { useUser } from "@/lib/useUser";
 import { KnowledgeUpload } from "@/components/KnowledgeUpload";
 import { FollowUpModal } from "@/components/FollowUpModal";
 import { PathSummaryModal } from "@/components/PathSummaryModal";
-import type { FollowUpQuestion, LearningSession } from "@/lib/types";
+import type { FollowUpQuestion, LearningSession, StartSessionResponse } from "@/lib/types";
 
 export default function HomePage() {
   const { userId, ready, signIn, signOut } = useUser();
@@ -79,6 +79,8 @@ function Dashboard({ userId, onSignOut }: { userId: string; onSignOut: () => voi
   const [detectedLanguage, setDetectedLanguage] = useState<string | null>(null);
   const [detectedDomain, setDetectedDomain] = useState<string>("Learning");
   const [showFollowUp, setShowFollowUp] = useState(false);
+  const [followUpFailed, setFollowUpFailed] = useState(false);
+  const [directResponse, setDirectResponse] = useState<StartSessionResponse | null>(null);
   // Path summary modal state
   const [showSummary, setShowSummary] = useState(false);
   const [summarySession, setSummarySession] = useState<LearningSession | null>(null);
@@ -94,21 +96,28 @@ function Dashboard({ userId, onSignOut }: { userId: string; onSignOut: () => voi
     setCreating(true);
     setCreateError(null);
     setCreateNotice(null);
+    setFollowUpFailed(false);
+    setDirectResponse(null);
     try {
       const followUp = await api.getFollowUp(query);
       setFollowUpQuestions(followUp.questions);
       setDetectedLanguage(followUp.detected_language);
       setDetectedDomain(followUp.detected_domain || "Learning");
-      setShowFollowUp(true);
+      setShowFollowUp(followUp.questions.length > 0);
       setCreating(false);
+      if (!followUp.questions.length) setFollowUpFailed(true);
     } catch (err) {
       setCreating(false);
-      setCreateError("Couldn't analyze request. Is the API running?");
+      setFollowUpFailed(true);
+      setDetectedLanguage(null);
+      setDetectedDomain("Learning");
+      setCreateError("Couldn't prepare questions. Retry or continue without them.");
     }
   }
 
   async function handleFollowUpSubmit(answers: Record<string, string>) {
     setShowFollowUp(false);
+    setFollowUpFailed(false);
     setCreating(true);
     setStageLabel("Starting agents");
     setCreateError(null);
@@ -119,7 +128,7 @@ function Dashboard({ userId, onSignOut }: { userId: string; onSignOut: () => voi
     try {
       await api.startSessionStream(userId, query, "B", {
         preferences: answers,
-        primary_language: detectedLanguage,
+        primary_language: answers.language || answers.primary_language || detectedLanguage,
         scope: scope,
         domain: detectedDomain,
         onStage: (_stage, label) => setStageLabel(label),
@@ -136,7 +145,8 @@ function Dashboard({ userId, onSignOut }: { userId: string; onSignOut: () => voi
             // Fallback: navigate directly if no learning_session in response
             router.push(`/session/${res.session_id}`);
           } else {
-            setCreateNotice("That read as a single question rather than a learning path...");
+            setDirectResponse(res);
+            setCreateNotice("Your answer is ready below.");
           }
         },
         onError: (msg) => {
@@ -194,6 +204,7 @@ function Dashboard({ userId, onSignOut }: { userId: string; onSignOut: () => voi
           />
           <button
             type="submit"
+            id="generate-path"
             disabled={creating}
             className="accent-ring rounded-xl px-5 py-3 font-medium text-ink-900 disabled:opacity-60"
             style={{ background: "var(--color-gold)" }}
@@ -206,12 +217,14 @@ function Dashboard({ userId, onSignOut }: { userId: string; onSignOut: () => voi
             {createError}
           </p>
         )}
+        {followUpFailed && !creating && <button type="button" className="accent-ring mt-3 rounded-lg border px-4 py-2" onClick={() => void handleFollowUpSubmit({})}>Continue without questions</button>}
         {createNotice && (
           <div role="status" className="mt-3">
             <p className="eyebrow mb-1">Answered directly</p>
             <p className="text-sm text-text-muted">{createNotice}</p>
           </div>
         )}
+        {directResponse && <section className="mt-4 whitespace-pre-wrap" aria-label="Direct answer">{directResponse.final_content || directResponse.exercise?.statement || "No answer was generated. Please try again."}</section>}
         {creating && (
           <p className="mt-3 flex items-center gap-2 text-sm text-text-muted">
             <span
@@ -243,6 +256,7 @@ function Dashboard({ userId, onSignOut }: { userId: string; onSignOut: () => voi
 
       <KnowledgeUpload userId={userId} />
 
+      {sessions.isError && <p role="alert">Could not load saved paths. <button onClick={() => void sessions.refetch()}>Retry saved paths</button></p>}
       <section className="mt-10">
         <h2 className="text-sm uppercase tracking-wider text-text-muted">Your paths</h2>
         <div className="mt-4 grid gap-3">

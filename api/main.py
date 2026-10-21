@@ -8,6 +8,8 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from persistence.errors import StorageUnavailableError, SessionConflictError
 
 from logging_config import setup_logging
 
@@ -33,24 +35,33 @@ app.add_middleware(
 app.include_router(router)
 
 
-@app.on_event("startup")
-def startup_create_tables():
-    """Auto-create tables from ORM models on startup (idempotent).
+@app.exception_handler(StorageUnavailableError)
+async def storage_unavailable(_request, _exc):
+    return JSONResponse(status_code=503, content={"detail": "Progress could not be saved or loaded. Please try again."})
 
-    Only runs when the active store is Postgres (the default). Lazy import so the
-    in-memory path never needs a live database connection.
-    """
-    if os.getenv("MINDMORPH_STORE", "postgres").lower() == "memory":
-        return
-    try:
-        from persistence.db import create_all
 
-        create_all()
-        logger.info("startup: database tables verified/created")
-    except Exception:
-        logger.warning("startup: could not verify DB tables — is PostgreSQL running?")
+@app.exception_handler(SessionConflictError)
+async def session_conflict(_request, exc):
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "store": os.getenv("MINDMORPH_STORE", "postgres")}
+
+
+@app.get("/ready")
+def ready():
+    store = os.getenv("MINDMORPH_STORE", "postgres").lower()
+    if store == "memory":
+        return {"status": "ready", "store": store, "durable": False}
+    try:
+        if store != "postgres":
+            raise ValueError("Unknown store")
+        from persistence.db import check_ready
+        check_ready()
+    except Exception:
+        logger.exception("Database readiness check failed")
+        return JSONResponse(status_code=503, content={"status": "not_ready", "store": store,
+                            "detail": "Database unavailable or migrations pending. Run alembic upgrade head."})
+    return {"status": "ready", "store": store, "durable": True}

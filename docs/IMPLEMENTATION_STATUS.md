@@ -15,6 +15,21 @@ Playwright: **44 passed**; type checking and a clean production build passed. Th
 repair was committed as `b57c43b` on `feature/learning-flow-improvements`. These checks do not
 verify a deployment. Detailed audit and work records are kept as local-only documents.
 
+**Reliability repair - 21 October 2026:** PostgreSQL no longer falls back silently to memory.
+Session writes compare a revision (migration `0003_session_revision`); stale updates return a conflict.
+`/health` reports process liveness; `/ready` checks database connectivity and migration head, and labels
+memory mode as non-durable. Database migrations are explicit (`python -m alembic upgrade head`), not
+created at API startup. Real-database tests cover concurrent writes, fresh API processes and outage/recovery.
+Assessment retries preserve mastery; question IDs and answer bounds are checked. Initial roadmaps and
+adaptations reject structural defects; grading rechecks locks and exercise revisions. A validated learner
+profile reaches planning, content, examples, practice, assessment and tutor messages. Non-coding domains
+avoid coding-only research sources. Dialog accessibility, skip/failure recovery and persisted assessment
+review are implemented. **Verification: 415 backend tests passed with zero skips (real database enabled); 50 browser tests
+passed; type checking and a clean isolated production build passed.** Two approved live hosted samples
+(JavaScript/browser widget and guitar/song) passed follow-up generation and produced valid seven-skill
+roadmaps; the guitar path had no coding skills. Research perspectives were synthetic supplied inputs.
+Comprehensive live lesson/exercise quality, a fresh Ubuntu run and public deployment remain unverified.
+
 ---
 
 ## 1. Current Architecture vs Target
@@ -30,7 +45,7 @@ verify a deployment. Detailed audit and work records are kept as local-only docu
 | **Grounding / RAG** | **Opt-in local RAG** (FastEmbed + pgvector/in-memory, `rag/`, `MINDMORPH_RAG=1`) — augments web search, never replaces it | RAG pipelines + agentic web search (Playwright/Firecrawl) |
 | **Observability** | LangSmith hooks (optional) + per-invocation token/cost accounting (`services/cost.py` `TokenMeter`) + per-stage wall-clock spans (`services/timing.py`, surfaced on `learning_session.timing` / `lessons[node].timing` and as `timing:` log lines); no metrics backend/exporter | Prometheus/Grafana/OpenTelemetry + Prompt Registry feedback loop |
 
-The repo is a **working multi-agent prototype** with **P0-P1 complete**: the Learning-Plan DAG
+The repo is a **working multi-agent prototype** with the **core P0-P1 learning loop implemented**: the Learning-Plan DAG
 (orchestrate → scout → academic/market/practical → consensus → reviewer → Skill Dependency Graph),
 the dual-path Content DAG (creative + live web grounding → synthesizer), the Exercise DAG + live
 grading, and the FastAPI + Postgres backend all run end-to-end. CrewAI is a non-goal — parallel
@@ -136,17 +151,20 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
     `graph/lesson_graph.py`, `agents/adaptation/`, `graph/skill_graph_adapt.py` (deterministic,
     id-stable merge). State lives in the `learning_session` blob (originally Streamlit session state;
     persisted to Postgres JSONB by #6).
-    Deferred to #6: Postgres/Redis persistence of `node_state`/`lessons`.
-6. ✅ **Persistence + backend** — **FastAPI** service (`api/`) exposes the loop over HTTP (create session /
-   list / get / open lesson / grade), each endpoint load→service→save. Loop logic extracted Streamlit-free
-   into `services/` (mastery, completion, orchestration). **Postgres** persistence via the Repository pattern
-   (`persistence/`): a `learning_session` stored as one JSONB row keyed by `(user_id, session_id)` —
-   Alembic migration + `docker-compose.yml`. An in-memory repo (`MINDMORPH_STORE=memory`) backs zero-infra
-   tests/dev. MVP user id = caller-supplied (no auth yet). **Verified on real Postgres:** create → open
-   lesson → grade (→ adaptation, 6→8 nodes) → **killed + rebooted the process → GET returned the graded
-   state intact** (cross-process durability proof); DB-gated integration test guards the JSONB path. 108
-   tests green. *Deferred:* Redis (JSONB suffices at prototype scale); re-pointing Streamlit at the API
-   (#12 retires it); Pinecone. *Satisfies:* §5.2, §5.4. *Closes:* the stateless prototype.
+    Postgres persists `node_state`/`lessons` via #6; Redis remains deferred.
+6. ✅ **Persistence + backend** - FastAPI (`api/`) exposes create/list/get/open/grade/assessment/chat.
+   Postgres stores each learning session in JSONB, keyed by `(user_id, session_id)`; repository reads
+   carry an out-of-band revision and updates compare/increment the row revision atomically. A stale
+   save returns **409**, including when a tutor stream finishes after another mutation. Database
+   failures return **503** and never use a hidden memory fallback. Explicit `MINDMORPH_STORE=memory`
+   remains process-local development/test storage with the same conflict contract.
+   **Schema:** run Alembic through `0003_session_revision`; startup no longer auto-creates tables.
+   `/health` is liveness; `/ready` checks connectivity and migration head (503 if unavailable/pending;
+   memory reports `durable: false`). Connection, query, lock and pool waits are bounded.
+   **Verified 21 October:** actual JSONB reads, simultaneous updates, lessons/mastery/assessment reads
+   through two fresh API processes, pgvector user isolation, actual database outage and recovery.
+   Conflict handling deliberately rejects stale changes; it does not silently merge or repeat grading.
+   *Deferred:* Redis and public identity/ownership (P3 #13). *Satisfies:* architecture 5.2, 5.4.
 7. 🟡 **Provider chain (Groq pool → Ollama) + RAG** — _RAG (grounding):_ `rag/` package adds a **local, no-API-key** retrieval
    arm. `rag/embeddings.py` wraps **FastEmbed** (ONNX `BAAI/bge-small-en-v1.5`, no torch) as a LangChain
    `Embeddings`; `rag/store.py` `RagStore` over `langchain_core` `InMemoryVectorStore` (chunk + `Source:`
@@ -178,11 +196,21 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
    Remote multi-vendor HTTP routing (Anthropic/OpenAI/Gemini) still open. *Satisfies (partial):* §5.3, §5.7.
 
 ### P2 — Personalization & ingestion
-8. 🟡 **Onboarding + Dynamic Skill Assessment** — after a path is created, `SkillAssessmentAgent`
+8. 🟡 **Onboarding + Dynamic Skill Assessment** - **21 October additions:** follow-up questions use
+   validated IDs/options and normalized language/scope values; collected answers become a learner
+   profile supplied to research, consensus, diagnostics, lessons, examples, exercises and tutor context.
+   Non-coding domains skip job/GitHub/dataset coding sources and use written practice. Quiz retries
+   are idempotent, correct answers preserve existing mastery/attempts, and saved review results use
+   question IDs. Skip All continues; failed/empty follow-up responses offer explicit continuation.
+   Newly generated/opened exercises carry revisions; stale/missing revision submissions and locked
+   node submissions are rejected. Structural validation checks graph IDs, levels, edges and cycles;
+   initial generation has one repair attempt; invalid adaptations preserve the grade and original graph.
+   **Two live follow-up/roadmap samples passed; broader AI teaching quality remains unverified.** Existing diagnostic behavior follows: after a path
+   is created, `SkillAssessmentAgent`
    (`agents/assessment/`, structured-output MCQ from the skill graph) generates a diagnostic quiz stored
    in `learning_session["assessment"]`. `POST /sessions/{user}/{session}/assessment` grades it:
    correct answers give those nodes a **head-start (`in_progress`, score `ASSESSMENT_PASS_SCORE`=60), NOT
-   `mastered`** via `services/mastery.apply_score` — one MCQ isn't mastery, and full-mastering on a perfect
+   `mastered`**, without counting an exercise attempt — one MCQ isn't mastery, and full-mastering on a perfect
    quiz would empty the path (the learner still studies; passing the node's exercise upgrades it). Unknown/
    hallucinated `node_id`s skipped (no phantom node_state). Web quiz UI (`web/components/AssessmentQuiz.tsx`)
    gates the session page until submitted/skipped. Quiz generation is best-effort (failure → no quiz, path
@@ -197,7 +225,7 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
      language must agree with its grading artifact; explicit unsupported execution languages never
      silently use Python. Other languages/conceptual exercises use `case_study`. SQL currently means
      learner-provided schema/data followed by verification SELECTs; query-only seeded-table exercises
-     are not implemented. Broader learner-profile/content/example language wiring remains partial.
+     are not implemented. Learner-profile/content/example wiring is implemented and regression-tested; live language adherence and teaching quality remain unverified.
 9. ✅ **User material ingestion** — `POST /users/{user_id}/knowledge` (multipart PDF) → **PyMuPDF**
    extract (`rag/pdf.py`) → chunk → **per-user** RAG store (`rag/registry.py`), keyed by user_id, with a
    **web upload UI** (`web/components/KnowledgeUpload.tsx`). The content graph resolves the retriever

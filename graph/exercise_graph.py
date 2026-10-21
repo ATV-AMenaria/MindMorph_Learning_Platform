@@ -28,6 +28,7 @@ from agents.exercise.exercise_synthesizer_agent import ExerciseSynthesizerAgent
 from agents.exercise.grader_agent import GraderAgent
 from agents.factual.factual_agent import FactualAgent
 from tools.grading_contract import normalize_language
+from services.learner_profile import with_profile, is_technical
 
 
 class ExerciseState(TypedDict, total=False):
@@ -40,6 +41,7 @@ class ExerciseState(TypedDict, total=False):
     dataset_material: Optional[str]
     exercise_statement: Optional[str]
     grading_artifact: Optional[dict]
+    learner_profile: Optional[dict]
     primary_language: Optional[str]
 
 
@@ -72,7 +74,9 @@ def build_exercise_graph(
         return material if isinstance(material, str) else str(material)
 
     def format_selector_node(state: ExerciseState) -> dict:
-        result = format_selector.select_format(state["user_query"])
+        if not is_technical(state.get("learner_profile")):
+            return {"exercise_format": "case_study", "exercise_language": None, "format_reasoning": "Subject-appropriate written practice"}
+        result = format_selector.select_format(with_profile(state["user_query"], state.get("learner_profile")))
         primary = state.get("primary_language")
         
         if not result:
@@ -81,7 +85,7 @@ def build_exercise_graph(
             reason = None
         else:
             fmt = result.format
-            lang = primary or result.language or "python"
+            lang = (result.language if result.language == "sql" else primary) or result.language or "python"
             reason = result.reasoning
             
         # The editor, saved artifact and execution router share the same canonical identifiers.
@@ -99,6 +103,8 @@ def build_exercise_graph(
                 "format_reasoning": reason}
 
     async def github_node(state: ExerciseState) -> dict:
+        if not is_technical(state.get("learner_profile")):
+            return {"github_material": None}
         query = f"{state['user_query']} example projects"
         try:
             material = await github(query)
@@ -112,12 +118,14 @@ def build_exercise_graph(
         return {"blog_material": blog.gather_facts(query)}
 
     def dataset_node(state: ExerciseState) -> dict:
+        if not is_technical(state.get("learner_profile")):
+            return {"dataset_material": None}
         query = f"public dataset Kaggle HuggingFace for {state['user_query']}"
         return {"dataset_material": dataset.gather_facts(query)}
 
     def synthesizer_node(state: ExerciseState) -> dict:
         statement = synthesizer.synthesize(
-            state["user_query"],
+            with_profile(state["user_query"], state.get("learner_profile")),
             state.get("exercise_format", "coding_challenge"),
             exercise_language=state.get("exercise_language"),
             github_material=state.get("github_material"),
@@ -129,7 +137,7 @@ def build_exercise_graph(
     def grader_node(state: ExerciseState) -> dict:
         language = state.get("exercise_language") or "python"
         artifact = grader.build_grading_artifact(
-            state["user_query"],
+            with_profile(state["user_query"], state.get("learner_profile")),
             state.get("exercise_format", "coding_challenge"),
             state.get("exercise_statement") or "",
             exercise_language=language,

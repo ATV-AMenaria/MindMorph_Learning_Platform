@@ -1,4 +1,5 @@
 import type { LearningSession } from "@/lib/types";
+import { Modal } from "./Modal";
 
 interface PathSummaryModalProps {
   session: LearningSession;
@@ -58,8 +59,7 @@ export function PathSummaryModal({ session, query, domain, onExplore }: PathSumm
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="surface w-full max-w-lg overflow-hidden rounded-2xl border border-white/10 shadow-2xl animate-fade-in">
+    <Modal label="Your learning path" onEscape={onExplore}>
         {/* Success banner */}
         <div
           className="px-6 py-5 text-center"
@@ -138,7 +138,6 @@ export function PathSummaryModal({ session, query, domain, onExplore }: PathSumm
             <span className="text-lg">→</span>
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

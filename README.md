@@ -155,6 +155,10 @@ the headroom. Keep the model on the OpenAI OSS family; Groq has deprecated its L
 
 For the durable path: `docker compose up -d db && conda run -n mindmorph alembic upgrade head`, then
 start the backend without `MINDMORPH_STORE=memory`.
+Run `alembic upgrade head` after pulling schema changes, including `0003_session_revision`.
+The API does not auto-create or migrate tables. `/health` checks the running process; `/ready`
+checks database connectivity and migration state (memory mode reports `durable: false`).
+Database errors return 503; overlapping stale saves return 409 and require reload/retry.
 
 ### Programmatic access
 

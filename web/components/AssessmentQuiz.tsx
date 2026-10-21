@@ -30,7 +30,7 @@ export function AssessmentQuiz({ quiz, submitting, onSubmit, onSkip }: Assessmen
   return (
     <section className="surface p-6 md:p-8">
       <p className="eyebrow mb-2">Quick check</p>
-      <h2 className="text-2xl font-semibold text-text-strong">Let&rsquo;s skip what you already know</h2>
+      <h2 className="text-2xl font-semibold text-text-strong">Find your starting point</h2>
       <p className="mt-2 max-w-2xl text-sm text-text-muted">
         Answer what you can — correct answers give you a head-start so you start where it matters.
         If you haven&rsquo;t learned something yet, choose &ldquo;No idea&rdquo; or skip.

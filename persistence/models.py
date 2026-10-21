@@ -28,6 +28,7 @@ class LearningSessionRow(Base):
     session_id: Mapped[str] = mapped_column(String, primary_key=True)
     # The whole learning_session dict (skill_graph, node_state, lessons, …). Portable JSON dict.
     data: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
     # A short human label for the session list (the original learning query / summary).
     title: Mapped[str] = mapped_column(String, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

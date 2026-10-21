@@ -27,6 +27,8 @@ from agents.factual.factual_agent import FactualAgent
 from agents.synthesizer.synthesizer_agent import SynthesizerAgent
 from agents.visual_generator.visual_generator_agent import VisualGeneratorAgent
 
+from services.learner_profile import with_profile
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,6 +42,7 @@ class ContentState(TypedDict, total=False):
     format_type: str          # 'A' Boost | 'B' Builder | 'C' Sprint
     prior_feedback: Optional[str]  # score-aware gap guidance; None = plain generation
     path_context: Optional[str]    # overall learning goal — keeps a node lesson in the path's language
+    learner_profile: Optional[dict]
     primary_language: Optional[str]
     user_id: Optional[str]    # for per-user RAG retrieval (the user's ingested material)
     creative_draft: str
@@ -119,7 +122,7 @@ def build_content_graph(
         fmt = state.get("format_type") or "B"
         return {
             "creative_draft": content.generate_content(
-                state["user_query"], fmt,
+                with_profile(state["user_query"], state.get("learner_profile")), fmt,
                 remediation=state.get("prior_feedback"),
                 context=state.get("path_context"),
                 primary_language=state.get("primary_language"),
@@ -135,7 +138,7 @@ def build_content_graph(
 
     def synthesizer_node(state: ContentState) -> dict:
         final = synthesizer.synthesize(
-            state["user_query"],
+            with_profile(state["user_query"], state.get("learner_profile")),
             state.get("creative_draft", ""),
             state.get("factual_findings"),
         )
@@ -146,7 +149,8 @@ def build_content_graph(
             return {"code_example": None}
         return {
             "code_example": example.generate_example(
-                state.get("final_content") or "", state["user_query"], state.get("path_context"),
+                state.get("final_content") or "", state["user_query"],
+                with_profile(state.get("path_context") or "", {**(state.get("learner_profile") or {}), **({"primary_language": state["primary_language"]} if state.get("primary_language") else {})}) or state.get("path_context"),
             )
         }
 

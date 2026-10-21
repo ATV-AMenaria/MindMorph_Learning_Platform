@@ -6,7 +6,8 @@ only type the thin request envelopes and list metadata.
 """
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+from services.learner_profile import make_profile
 
 
 class CreateSessionRequest(BaseModel):
@@ -17,6 +18,14 @@ class CreateSessionRequest(BaseModel):
     primary_language: Optional[str] = None
     scope: Optional[str] = None
     domain: Optional[str] = None
+
+    @model_validator(mode="after")
+    def normalize_profile(self):
+        profile = make_profile(self.preferences, self.primary_language, self.scope, self.domain, self.query)
+        self.domain = profile.get("domain")
+        self.primary_language = profile.get("primary_language")
+        self.scope = profile.get("scope")
+        return self
 
 
 class FollowUpRequest(BaseModel):
@@ -32,6 +41,7 @@ class FollowUpResponse(BaseModel):
 
 class GradeRequest(BaseModel):
     solution: str
+    exercise_revision: Optional[str] = None
 
 
 class IngestResponse(BaseModel):

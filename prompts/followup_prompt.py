@@ -32,6 +32,9 @@ You MUST:
    - Keep questions simple, on-point, and directly useful for building the learning path
 
 4. KEEP IT SHORT: 3-4 questions maximum. Each question must be clear and concise.
+5. Use stable question IDs: experience, goal, scope, language, timeframe, or a descriptive snake_case ID.
+   A scope question MUST use exactly the machine values "focused" and "foundation" as its options.
+   A programming-language question MUST use language IDs such as "python", "javascript", "sql".
 
 IMPORTANT: ALL questions MUST be multiple-choice. You MUST provide a list of 2-5 strings in the `options` array for EVERY question. Do not leave `options` empty.
 

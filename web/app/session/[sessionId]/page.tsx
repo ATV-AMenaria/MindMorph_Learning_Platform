@@ -67,9 +67,10 @@ export default function SessionPage() {
 
   const grade = useMutation({
     mutationFn: ({ nodeId, solution }: { nodeId: string; solution: string }) =>
-      api.grade(userId!, sessionId, nodeId, solution),
+      api.grade(userId!, sessionId, nodeId, solution, sessionQ.data?.learning_session.lessons[nodeId]?.exercise?.revision),
     onSuccess: (res, vars) => {
       writeBack(res);
+      setErrorMsg(null);
       if (res.grade_result) {
         setGradeOutcome({
           nodeId: vars.nodeId,
@@ -153,6 +154,7 @@ export default function SessionPage() {
       {/* The Reviewer agent's verdict, surfaced. The pipeline serves a rejected graph anyway (the
           path is still completable), so the learner has to be told the plan may have a hole — but
           only when the verdict is explicitly false; null/absent means "no verdict", not "failed". */}
+      {session.assessment?.submitted && session.assessment.results && <button className="accent-ring mt-4 rounded-lg border px-4 py-2" onClick={() => setShowResults(true)}>Review assessment</button>}
       {session.review_passed === false && <ReviewCaveat notes={session.review_notes} />}
 
       {pendingAssessment && session.assessment ? (
@@ -223,6 +225,7 @@ export default function SessionPage() {
             ⚠️ {errorMsg}
           </p>
         )}
+        {errorMsg && <button className="accent-ring mt-2 rounded-lg border px-4 py-2" onClick={() => { void sessionQ.refetch(); setErrorMsg(null); }}>Reload saved progress</button>}
         {open.isPending && (
           <p className="mt-3 flex items-center gap-2 text-sm text-text-muted">
             <span className="lesson-skeleton-spinner" />
@@ -244,7 +247,7 @@ export default function SessionPage() {
           />
         ) : selected && session.lessons[selected] ? (
           <LessonPanel
-            key={selected}
+            key={`${selected}:${session.lessons[selected]?.exercise?.revision ?? "legacy"}`}
             session={session}
             nodeId={selected}
             grading={grade.isPending}

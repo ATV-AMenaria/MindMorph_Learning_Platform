@@ -48,6 +48,7 @@ export interface GradingArtifact {
 }
 
 export interface Exercise {
+  revision?: string;
   format?: "coding_challenge" | "case_study" | null;
   language?: "python" | "javascript" | "sql" | null;
   statement?: string | null;
@@ -75,6 +76,7 @@ export interface GradeResult {
 }
 
 export interface MCQQuestion {
+  id?: string;
   node_id: string;
   question: string;
   options: string[];
@@ -88,6 +90,7 @@ export interface AssessmentQuiz {
 
 export interface AssessmentResult {
   question_id: string;
+  node_id?: string;
   chosen_index: number;
   correct_index: number;
   explanation?: string;

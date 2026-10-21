@@ -34,6 +34,7 @@ class LessonState(TypedDict, total=False):
     prior_weaknesses: Optional[list]  # list[str] gap topics from a prior failed attempt
     user_id: Optional[str]            # for per-user RAG retrieval in the content sub-graph
     path_context: Optional[str]       # overall goal — keeps the lesson in the path's language
+    learner_profile: Optional[dict]
     primary_language: Optional[str]
     # Derived.
     skill_query: str
@@ -77,6 +78,7 @@ def build_lesson_graph(content_graph: Optional[Any] = None, exercise_graph: Opti
                     "user_id": state.get("user_id"),
                     "path_context": state.get("path_context"),
                     "primary_language": state.get("primary_language"),
+                    "learner_profile": state.get("learner_profile"),
                 }
             )
         return {"skill_query": skill_query, "content": out.get("final_content")}
@@ -89,6 +91,7 @@ def build_lesson_graph(content_graph: Optional[Any] = None, exercise_graph: Opti
             out = await exercise_graph.ainvoke({
                 "user_query": skill_query,
                 "primary_language": state.get("primary_language"),
+                    "learner_profile": state.get("learner_profile"),
             })
         return {
             "exercise_format": out.get("exercise_format"),

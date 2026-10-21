@@ -271,9 +271,10 @@ def test_grade_sub40_adds_remedial_node_and_locks_via_http(monkeypatch):
 
     client = TestClient(app)
     sid = client.post("/sessions", json={"user_id": "u1", "query": "p"}).json()["session_id"]
-    assert client.post(f"/sessions/u1/{sid}/lessons/a").status_code == 200
+    opened = client.post(f"/sessions/u1/{sid}/lessons/a")
+    assert opened.status_code == 200
 
-    g = client.post(f"/sessions/u1/{sid}/grade", params={"node_id": "a"}, json={"solution": "bad code"})
+    g = client.post(f"/sessions/u1/{sid}/grade", params={"node_id": "a"}, json={"solution": "bad code", "exercise_revision": opened.json()["learning_session"]["lessons"]["a"]["exercise"]["revision"]})
     assert g.status_code == 200
     body = g.json()
     assert body["new_node_ids"] == ["a_basics"]

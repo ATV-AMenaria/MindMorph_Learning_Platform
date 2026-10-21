@@ -41,14 +41,18 @@ def test_get_missing_returns_none(repo):
 
 def test_save_upserts_data(repo):
     repo.save("u1", "s1", _ls("v1"), title="Learn X")
-    repo.save("u1", "s1", _ls("v2"))  # overwrite, no title
+    updated = repo.get("u1", "s1")
+    updated.update(_ls("v2"))
+    repo.save("u1", "s1", updated)  # overwrite, no title
     got = repo.get("u1", "s1")
     assert got["skill_graph"]["summary"] == "v2"
 
 
 def test_upsert_without_title_preserves_existing_title(repo):
     repo.save("u1", "s1", _ls(), title="Original")
-    repo.save("u1", "s1", _ls("v2"))  # no title supplied
+    updated = repo.get("u1", "s1")
+    updated.update(_ls("v2"))
+    repo.save("u1", "s1", updated)  # no title supplied
     meta = repo.list_sessions("u1")
     assert meta[0]["title"] == "Original"
 
@@ -95,7 +99,9 @@ def test_list_sessions_order_is_deterministic_when_timestamps_tie(repo, monkeypa
     repo.save("u1", "s1", _ls())
     repo.save("u1", "s2", _ls())
     assert [m["session_id"] for m in repo.list_sessions("u1")] == ["s2", "s1"]
-    repo.save("u1", "s1", _ls("resaved"))
+    updated = repo.get("u1", "s1")
+    updated.update(_ls("resaved"))
+    repo.save("u1", "s1", updated)
     assert [m["session_id"] for m in repo.list_sessions("u1")] == ["s1", "s2"]
     assert all(m["updated_at"] == fixed.isoformat() for m in repo.list_sessions("u1"))
 

@@ -46,10 +46,13 @@ export function TutorChat({
     setBusy(true);
     setAnnouncement("Tutor is responding…");
 
+    try {
     await api.streamChat(userId, sessionId, nodeId, message, {
       onToken: (t) => setStreaming((s) => s + t),
       onError: (m) => {
         setError(m);
+        setInput(message);
+        qc.invalidateQueries({ queryKey: sessionKey });
         setAnnouncement("");
         setBusy(false);
         setPendingUser(null);
@@ -66,6 +69,15 @@ export function TutorChat({
         qc.invalidateQueries({ queryKey: sessionKey }); // persisted history is authoritative
       },
     });
+    } catch {
+      setError("The connection was interrupted. Your question is kept below; check saved history before retrying.");
+      setInput(message);
+      setBusy(false);
+      setPendingUser(null);
+      setStreaming("");
+      setAnnouncement("");
+      qc.invalidateQueries({ queryKey: sessionKey });
+    }
   };
 
   if (!open) {
