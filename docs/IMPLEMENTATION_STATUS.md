@@ -280,7 +280,13 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
   thumbs-down (`POST …/lessons/{node}/flag` → `content_flagged`, surfaced in `web/LessonPanel`).
   Operator view `GET /admin/funnel` (shared-secret `x-admin-token` gate, fails closed) aggregates
   across all sessions via `repo.list_all()`. Persists in the JSONB blob like `usage`. *Deferred:*
-  dashboards/Kafka (P3 #13), per-user analytics. De-risks the Gate-1 "watch real users" checkpoint.
+  dashboards/Kafka (P3 #13), broader per-user analytics. **21 October: per-skill practice history**
+  now shows valid recorded scores and local dates below the lesson/result, newest five first with
+  Show all/Show less. It updates after grading and survives reloads or a cleared lesson cache;
+  diagnostic quizzes and grading-system failures are excluded. No new API, database migration or AI
+  calls. **Verified: 415 backend tests (real database/outage checks, zero skips), 55 browser tests,
+  type checking and a clean isolated production build passed.** Cross-session per-user analytics
+  remains open. De-risks the Gate-1 "watch real users" checkpoint.
 - 🟡 **Cost observability (unit economics)** — `services/cost.py` `TokenMeter` (a LangChain callback
   attached to the lesson-graph invocation in `_run_lesson`) aggregates token usage across all nested
   LLM calls; `estimate_cost` prices it off `MODEL_PRICES` (Groq `openai/gpt-oss-120b` at $0.15/$0.60 per 1M

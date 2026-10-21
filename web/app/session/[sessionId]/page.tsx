@@ -8,6 +8,7 @@ import { AssessmentResults } from "@/components/AssessmentResults";
 import { GradeResult } from "@/components/GradeResult";
 import { LessonPanel } from "@/components/LessonPanel";
 import { LessonSkeleton } from "@/components/LessonSkeleton";
+import { PracticeHistory } from "@/components/PracticeHistory";
 import { SkillGraph } from "@/components/SkillGraph";
 import { TutorChat } from "@/components/TutorChat";
 import { LockedError, api } from "@/lib/api";
@@ -261,6 +262,13 @@ export default function SessionPage() {
           </div>
         )}
       </section>
+
+      {selected && <PracticeHistory
+        key={selected}
+        events={session.events}
+        nodeId={selected}
+        label={session.skill_graph.nodes.find((node) => node.id === selected)?.label ?? selected}
+      />}
 
       <TutorChat
         userId={userId!}
