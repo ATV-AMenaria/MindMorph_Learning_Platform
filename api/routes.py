@@ -18,6 +18,8 @@ from api.schemas import (
     ChatRequest,
     CreateSessionRequest,
     FlagRequest,
+    FollowUpRequest,
+    FollowUpResponse,
     GradeRequest,
     IngestResponse,
     SessionMeta,
@@ -25,11 +27,14 @@ from api.schemas import (
     StartSessionResponse,
 )
 from persistence.repository import get_default_repository
+from persistence.errors import StorageUnavailableError, SessionConflictError
 from services.events import STAGES, funnel_summary, record_event
 from services.learning_service import (
     LockedNodeError,
+    StaleExerciseError,
     astream_session,
     build_tutor_messages,
+    generate_followup,
     grade,
     grade_assessment,
     open_lesson,
@@ -58,11 +63,33 @@ def _load_or_404(repo, user_id: str, session_id: str) -> dict:
     return ls
 
 
+@router.post("/sessions/followup", response_model=FollowUpResponse)
+def get_followup_questions(req: FollowUpRequest) -> FollowUpResponse:
+    """Generate follow-up questions before creating a session."""
+    try:
+        result = generate_followup(req.query)
+        if not result:
+            raise ValueError("Failed to generate follow-up questions")
+    except Exception as e:
+        raise _service_unavailable("followup", e)
+    return FollowUpResponse(**result)
+
+
 @router.post("/sessions", response_model=StartSessionResponse)
 def create_session(req: CreateSessionRequest) -> StartSessionResponse:
     """Run orchestration for a query. Only the SCOUT route yields a persisted learning_session."""
+    extra = {}
+    if req.preferences is not None:
+        extra["preferences"] = req.preferences
+    if req.primary_language is not None:
+        extra["primary_language"] = req.primary_language
+    if req.scope is not None:
+        extra["scope"] = req.scope
+    if req.domain is not None:
+        extra["domain"] = req.domain
+
     try:
-        result = start_session(req.query, req.format_type)
+        result = start_session(req.query, req.format_type, **extra)
     except Exception as e:
         raise _service_unavailable("start_session", e)
     resp = StartSessionResponse(
@@ -85,9 +112,19 @@ async def create_session_stream(req: CreateSessionRequest) -> StreamingResponse:
     """Streaming twin of ``POST /sessions``: SSE progress (one frame per LangGraph node) instead of
     one ~60s blocking wait. Terminal frame carries the same payload shape the sync route returns."""
 
+    extra = {}
+    if req.preferences is not None:
+        extra["preferences"] = req.preferences
+    if req.primary_language is not None:
+        extra["primary_language"] = req.primary_language
+    if req.scope is not None:
+        extra["scope"] = req.scope
+    if req.domain is not None:
+        extra["domain"] = req.domain
+
     async def gen():
         try:
-            async for evt in astream_session(req.query, req.format_type):
+            async for evt in astream_session(req.query, req.format_type, **extra):
                 if "result" not in evt:
                     yield _sse({"stage": evt["stage"], "label": evt["label"]})
                     continue
@@ -105,6 +142,8 @@ async def create_session_stream(req: CreateSessionRequest) -> StreamingResponse:
                     resp.session_id = session_id
                     resp.learning_session = ls
                 yield _sse({"done": True, "session": resp.model_dump()})
+        except (StorageUnavailableError, SessionConflictError) as exc:
+            yield _sse({"error": str(exc)})
         except Exception:
             logger.exception("api: create_session_stream failed")
             yield _sse({"error": GEN_FAILED})
@@ -132,7 +171,10 @@ def open_node_lesson(user_id: str, session_id: str, node_id: str) -> SessionResp
         ls = open_lesson(ls, node_id, user_id=user_id)
     except LockedNodeError as e:
         # Server-side gate: a locked node cannot be opened even by a hand-crafted request.
+        repo.save(user_id, session_id, ls)  # preserve any recovered remediation before returning the lock
         raise HTTPException(status_code=409, detail={"error": "locked", "pending": e.pending})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         # Lesson compose is LLM-backed (content + exercise) — transient failure ⇒ 503, not 500.
         # Record the failed attempt (a funnel/content signal) and persist before surfacing the 503.
@@ -209,7 +251,11 @@ async def chat(user_id: str, session_id: str, req: ChatRequest) -> StreamingResp
             yield _sse({"error": GEN_FAILED})
             return
         ls["chat"].append({"role": "assistant", "content": full})
-        repo.save(user_id, session_id, ls)
+        try:
+            repo.save(user_id, session_id, ls)
+        except (StorageUnavailableError, SessionConflictError) as exc:
+            yield _sse({"error": str(exc)})
+            return
         yield _sse({"done": True})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
@@ -223,7 +269,12 @@ def grade_node(user_id: str, session_id: str, node_id: str, req: GradeRequest) -
     new_node_ids: list[str] = []
     result: dict | None = None
     try:
-        ls, new_node_ids, result = grade(ls, node_id, req.solution)
+        extra = {"exercise_revision": req.exercise_revision} if req.exercise_revision is not None else {}
+        ls, new_node_ids, result = grade(ls, node_id, req.solution, **extra)
+    except LockedNodeError as e:
+        raise HTTPException(status_code=409, detail={"error": "locked", "pending": e.pending})
+    except StaleExerciseError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

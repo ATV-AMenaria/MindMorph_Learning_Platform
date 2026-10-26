@@ -10,6 +10,10 @@ import os
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Optional
+from threading import RLock
+from functools import wraps
+
+from persistence.errors import SessionSnapshot, SessionConflictError, StorageUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +30,11 @@ class LearningSessionRepository(ABC):
 
     @abstractmethod
     def save(self, user_id: str, session_id: str, ls: dict, title: Optional[str] = None) -> None:
-        """Upsert the learning_session dict. ``title`` is set on insert; preserved if None on update."""
+        """Insert a new dict, or save a snapshot returned by get().
+
+        Updates compare the snapshot's revision; stale snapshots and unversioned overwrites raise
+        SessionConflictError. Missing titles preserve the existing label.
+        """
 
     @abstractmethod
     def list_sessions(self, user_id: str) -> list[dict]:
@@ -42,43 +50,54 @@ class LearningSessionRepository(ABC):
         use only — loads full blobs across all users, so callers must gate access (see /admin/funnel)."""
 
 
-class PostgresLearningSessionRepository(LearningSessionRepository):
-    """Production store: one JSONB row per session. SQLAlchemy/Postgres imports are done lazily so
-    importing this module (e.g. for the in-memory store, or in tests) needs no live database."""
+def _storage_errors(method):
+    @wraps(method)
+    def wrapped(*args, **kwargs):
+        from sqlalchemy.exc import SQLAlchemyError
+        try:
+            return method(*args, **kwargs)
+        except SQLAlchemyError as exc:
+            logger.exception("Database operation failed: %s", method.__name__)
+            raise StorageUnavailableError("Progress could not be saved or loaded. Please try again.") from exc
+    return wrapped
 
-    def get(self, user_id: str, session_id: str) -> Optional[dict]:
+
+class PostgresLearningSessionRepository(LearningSessionRepository):
+    """Durable storage only. Updates compare the version read by the caller."""
+
+    @_storage_errors
+    def get(self, user_id, session_id):
         from persistence.db import get_sessionmaker
         from persistence.models import LearningSessionRow
-
         with get_sessionmaker()() as session:
             row = session.get(LearningSessionRow, (user_id, session_id))
-            return dict(row.data) if row is not None else None
+            return SessionSnapshot(row.data, row.revision) if row is not None else None
 
-    def save(self, user_id: str, session_id: str, ls: dict, title: Optional[str] = None) -> None:
-        # Postgres upsert: insert the blob, or overwrite ``data`` on (user_id, session_id) conflict.
-        # On update we always refresh data + updated_at; ``title`` is only overwritten when a non-empty
-        # one is supplied, so a later save() that omits the title never wipes the existing one.
-        from sqlalchemy import func
-        from sqlalchemy.dialects.postgresql import insert as pg_insert
-
+    @_storage_errors
+    def save(self, user_id, session_id, ls, title=None):
+        from sqlalchemy import update, func
+        from sqlalchemy.dialects.postgresql import insert
         from persistence.db import get_sessionmaker
-        from persistence.models import LearningSessionRow
-
-        stmt = pg_insert(LearningSessionRow).values(
-            user_id=user_id, session_id=session_id, data=ls, title=title or "",
-            created_at=func.now(), updated_at=func.now(),
-        )
-        update_set = {"data": stmt.excluded.data, "updated_at": func.now()}
-        if title:
-            update_set["title"] = stmt.excluded.title
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["user_id", "session_id"], set_=update_set
-        )
+        from persistence.models import LearningSessionRow as Row
+        expected = getattr(ls, "revision", None)
+        if expected is None:
+            stmt = insert(Row).values(user_id=user_id, session_id=session_id, data=dict(ls),
+                                      title=title or "", revision=1).on_conflict_do_nothing()
+        else:
+            values = {"data": dict(ls), "updated_at": func.now(), "revision": Row.revision + 1}
+            if title is not None:
+                values["title"] = title
+            stmt = update(Row).where(Row.user_id == user_id, Row.session_id == session_id,
+                                     Row.revision == expected).values(**values)
         with get_sessionmaker()() as session:
-            session.execute(stmt)
+            revision = session.execute(stmt.returning(Row.revision)).scalar_one_or_none()
+            if revision is None:
+                raise SessionConflictError("Your progress changed in another action. Reload the path before trying again.")
             session.commit()
+        if isinstance(ls, SessionSnapshot):
+            ls.revision = revision
         logger.info("persistence: saved session %s/%s", user_id, session_id)
-        
+
         # Phase 3.4: Sync progress to Neo4j
         try:
             from persistence.neo4j_graph import write_session_progress
@@ -86,56 +105,39 @@ class PostgresLearningSessionRepository(LearningSessionRepository):
         except Exception:
             pass
 
-    def list_sessions(self, user_id: str) -> list[dict]:
+    @_storage_errors
+    def list_sessions(self, user_id):
         from sqlalchemy import select
-
         from persistence.db import get_sessionmaker
-        from persistence.models import LearningSessionRow
-
+        from persistence.models import LearningSessionRow as Row
         with get_sessionmaker()() as session:
-            rows = session.execute(
-                select(LearningSessionRow)
-                .where(LearningSessionRow.user_id == user_id)
-                .order_by(LearningSessionRow.updated_at.desc())
-            ).scalars().all()
-            return [
-                {
-                    "session_id": r.session_id,
-                    "title": r.title,
-                    "updated_at": r.updated_at.isoformat() if r.updated_at else None,
-                }
-                for r in rows
-            ]
+            rows = session.execute(select(Row).where(Row.user_id == user_id)
+                                   .order_by(Row.updated_at.desc(), Row.session_id)).scalars().all()
+            return [{"session_id": r.session_id, "title": r.title,
+                     "updated_at": r.updated_at.isoformat() if r.updated_at else None} for r in rows]
 
-    def delete(self, user_id: str, session_id: str) -> None:
+    @_storage_errors
+    def delete(self, user_id, session_id):
+        from sqlalchemy import delete
         from persistence.db import get_sessionmaker
-        from persistence.models import LearningSessionRow
-
+        from persistence.models import LearningSessionRow as Row
         with get_sessionmaker()() as session:
-            row = session.get(LearningSessionRow, (user_id, session_id))
-            if row is not None:
-                session.delete(row)
-                session.commit()
+            session.execute(delete(Row).where(Row.user_id == user_id, Row.session_id == session_id))
+            session.commit()
 
-    def list_all(self) -> list[tuple[str, str, dict]]:
+    @_storage_errors
+    def list_all(self):
         from sqlalchemy import select
-
         from persistence.db import get_sessionmaker
-        from persistence.models import LearningSessionRow
-
-        # Bounded: this materializes full JSONB blobs in memory, so cap it (operator/analytics use at
-        # prototype scale). A real analytics path would page or stream; if the cap is hit the
-        # /admin/funnel aggregate is a lower bound — fine for Gate-1 directional signal.
+        from persistence.models import LearningSessionRow as Row
         with get_sessionmaker()() as session:
-            rows = (
-                session.execute(select(LearningSessionRow).limit(LIST_ALL_LIMIT)).scalars().all()
-            )
+            rows = session.execute(select(Row).limit(LIST_ALL_LIMIT)).scalars().all()
             return [(r.user_id, r.session_id, dict(r.data)) for r in rows]
 
 
 class InMemoryLearningSessionRepository(LearningSessionRepository):
-    """Process-local store (no infra). Doubles as the test store and a dev fallback when no Postgres
-    is available. NOT durable across process restarts — use Postgres for real persistence.
+    """Explicit process-local development/test store. Never a hidden database fallback.
+    NOT durable across process restarts — use Postgres for real persistence.
 
     Stored dicts are round-tripped through ``json.dumps/loads`` (NOT deepcopy) on the way in: this both
     isolates persisted state from caller mutation AND faithfully mirrors the JSONB store — a value the
@@ -144,22 +146,34 @@ class InMemoryLearningSessionRepository(LearningSessionRepository):
     """
 
     def __init__(self) -> None:
+        self._lock = RLock()
         self._store: dict[tuple[str, str], dict] = {}
+        self._save_sequence = 0
 
     def get(self, user_id: str, session_id: str) -> Optional[dict]:
-        row = self._store.get((user_id, session_id))
-        return json.loads(row["data"]) if row is not None else None
+        with self._lock:
+            row = self._store.get((user_id, session_id))
+            return SessionSnapshot(json.loads(row["data"]), row["revision"]) if row is not None else None
 
     def save(self, user_id: str, session_id: str, ls: dict, title: Optional[str] = None) -> None:
-        key = (user_id, session_id)
-        existing = self._store.get(key)
-        kept_title = existing["title"] if (existing and not title) else (title or "")
-        self._store[key] = {
-            "data": json.dumps(ls),  # raises TypeError on any non-JSON-serializable value (like JSONB)
-            "title": kept_title,
-            "updated_at": datetime.now(timezone.utc),
-        }
-        
+        data = json.dumps(ls)
+        with self._lock:
+            key = (user_id, session_id)
+            existing = self._store.get(key)
+            expected = getattr(ls, "revision", None)
+            current = existing["revision"] if existing else None
+            if current != expected:
+                raise SessionConflictError("Your progress changed in another action. Reload the path before trying again.")
+            revision = (current or 0) + 1
+            kept_title = existing["title"] if existing and title is None else (title or "")
+            self._save_sequence += 1
+            self._store[key] = {
+                "data": data, "title": kept_title, "updated_at": datetime.now(timezone.utc),
+                "save_sequence": self._save_sequence, "revision": revision,
+            }
+            if isinstance(ls, SessionSnapshot):
+                ls.revision = revision
+
         # Phase 3.4: Sync progress to Neo4j
         try:
             from persistence.neo4j_graph import write_session_progress
@@ -168,22 +182,21 @@ class InMemoryLearningSessionRepository(LearningSessionRepository):
             pass
 
     def list_sessions(self, user_id: str) -> list[dict]:
-        rows = [
-            (sid, row) for (uid, sid), row in self._store.items() if uid == user_id
-        ]
-        rows.sort(key=lambda t: t[1]["updated_at"], reverse=True)
+        with self._lock:
+            rows = [(sid, row.copy()) for (uid, sid), row in self._store.items() if uid == user_id]
+        rows.sort(key=lambda t: (t[1]["updated_at"], t[1]["save_sequence"]), reverse=True)
         return [
             {"session_id": sid, "title": row["title"], "updated_at": row["updated_at"].isoformat()}
             for sid, row in rows
         ]
 
     def delete(self, user_id: str, session_id: str) -> None:
-        self._store.pop((user_id, session_id), None)
+        with self._lock:
+            self._store.pop((user_id, session_id), None)
 
     def list_all(self) -> list[tuple[str, str, dict]]:
-        return [
-            (uid, sid, json.loads(row["data"])) for (uid, sid), row in self._store.items()
-        ]
+        with self._lock:
+            return [(uid, sid, json.loads(row["data"])) for (uid, sid), row in self._store.items()]
 
 
 # A single in-memory instance shared across the process when the memory store is selected, so the API
@@ -193,8 +206,10 @@ _memory_singleton = InMemoryLearningSessionRepository()
 
 def get_default_repository() -> LearningSessionRepository:
     """Return the configured repository. ``MINDMORPH_STORE=memory`` selects the in-memory store
-    (zero-infra dev/test); anything else (default) uses Postgres."""
+    (zero-infra dev/test); ``postgres`` (default) selects durable storage."""
     store = os.getenv("MINDMORPH_STORE", "postgres").lower()
     if store == "memory":
         return _memory_singleton
+    if store != "postgres":
+        raise StorageUnavailableError("Unknown storage mode. Select memory or postgres.")
     return PostgresLearningSessionRepository()

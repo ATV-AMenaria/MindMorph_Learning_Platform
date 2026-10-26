@@ -38,6 +38,8 @@ from graph.exercise_graph import build_exercise_graph
 from graph.skill_graph_adapt import prune_dangling_edges
 from graph.skill_graph_render import skill_graph_to_mermaid
 from services.timing import span
+from services.learner_profile import with_profile, is_technical
+from graph.validation import validate_skill_graph
 
 
 class LearningPlanState(TypedDict, total=False):
@@ -46,6 +48,10 @@ class LearningPlanState(TypedDict, total=False):
     format_type: str
     route: str
     reasoning: str
+    learner_profile: Optional[dict]
+    preferences: Optional[dict]
+    primary_language: Optional[str]
+    scope: Optional[str]
     # Learning-plan branch
     scout_queries: dict
     academic_output: Optional[str]
@@ -201,27 +207,33 @@ def build_graph(
 
     def scout_node(state: LearningPlanState) -> dict:
         with span("graph.scout"):
-            out = scout.generate_specialized_queries(state["user_query"])
+            out = scout.generate_specialized_queries(with_profile(state["user_query"], state.get("learner_profile")))
         return {"scout_queries": _normalize_scout_queries(out)}
 
     def academic_node(state: LearningPlanState) -> dict:
         query = state.get("scout_queries", {}).get("ACADEMIC") or state["user_query"]
         with span("graph.academic"):
-            resp = academic.provide_academic_roadmap(query)
+            resp = academic.provide_academic_roadmap(with_profile(query, state.get("learner_profile")))
         return {"academic_output": resp.content if resp else None}
 
     async def market_node(state: LearningPlanState) -> dict:
+        if not is_technical(state.get("learner_profile")):
+            return {"market_output": None}
         query = state.get("scout_queries", {}).get("MARKET") or state["user_query"]
         with span("graph.market"):
-            return {"market_output": await _run_market(market, query)}
+            return {"market_output": await _run_market(market, with_profile(query, state.get("learner_profile")))}
 
     async def practical_node(state: LearningPlanState) -> dict:
         query = state.get("scout_queries", {}).get("PRACTICAL") or state["user_query"]
         with span("graph.practical"):
+            if not is_technical(state.get("learner_profile")):
+                from agents.factual.factual_agent import FactualAgent
+                material = await asyncio.to_thread((factual or FactualAgent()).gather_facts, query)
+                return {"practical_output": material}
             repos = await _fetch_github_repos(query)
             # provide_practical_advice uses the SYNC llm.invoke; calling it directly here would block
             # the event loop for the whole LLM call and stall the concurrently-running Market node.
-            resp = await asyncio.to_thread(practical.provide_practical_advice, query, github_repos=repos)
+            resp = await asyncio.to_thread(practical.provide_practical_advice, with_profile(query, state.get("learner_profile")), github_repos=repos)
         return {"practical_output": resp.content if resp else None}
 
     def consensus_node(state: LearningPlanState) -> dict:
@@ -235,21 +247,39 @@ def build_graph(
                 "(job scrape returned nothing or timed out) — skill graph built from Academic + Practical only",
                 state["user_query"],
             )
+        scope_instruction = ""
+        scope = state.get("scope")
+        lang = state.get("primary_language") or "the detected language"
+        if scope == "focused":
+            scope_instruction = f"The learner wants a FOCUSED path: only include topics directly relevant to their domain. Use {lang} for all code examples. Do NOT include foundational CS topics in other languages."
+        elif scope == "foundation":
+            scope_instruction = "The learner wants a STRONG FOUNDATION path: start with fundamentals of the requested subject, then specialize. Do not add unrelated computer science or programming topics."
+
         with span("graph.consensus"):
             sg = consensus.build_skill_graph(
-                state["user_query"],
+                with_profile(state["user_query"], state.get("learner_profile")),
                 state.get("academic_output"),
                 market_text,
                 state.get("practical_output"),
+                scope_instruction=scope_instruction,
             )
-        if not sg:
-            return {"skill_graph": None, "skill_graph_mermaid": ""}
         # Deterministic coherence repair, same invariant apply_adaptation enforces on adaptations:
         # an edge to a node id the model never emitted becomes an unmasterable prerequisite in
         # services/completion.py, permanently locking its dependants and making is_session_complete
         # unreachable. Drop it here — BEFORE the mermaid render and before the Reviewer — so the
         # persisted graph, the diagram and the review all see the same coherent artifact.
         graph_dict, dropped = prune_dangling_edges(sg)
+        try:
+            validate_skill_graph(graph_dict)
+        except ValueError as exc:
+            # One bounded repair request, then fail clearly instead of persisting an impossible path.
+            sg = consensus.build_skill_graph(
+                with_profile(state["user_query"], state.get("learner_profile")),
+                state.get("academic_output"), market_text, state.get("practical_output"),
+                scope_instruction=scope_instruction + " Repair structural error: " + str(exc),
+            )
+            graph_dict, dropped = prune_dangling_edges(sg)
+            validate_skill_graph(graph_dict)
         if dropped:
             logger.warning(
                 "Consensus graph incoherent for %r: dropped %d edge(s) referencing unknown node ids: %s",
@@ -284,7 +314,7 @@ def build_graph(
 
     async def content_node(state: LearningPlanState) -> dict:
         out = await content_graph.ainvoke(
-            {"user_query": state["user_query"], "format_type": state.get("format_type", "B")}
+            {"user_query": state["user_query"], "format_type": state.get("format_type", "B"), "primary_language": state.get("primary_language"), "learner_profile": state.get("learner_profile")}
         )
         return {
             "creative_draft": out.get("creative_draft"),
@@ -293,7 +323,7 @@ def build_graph(
         }
 
     async def exercise_node(state: LearningPlanState) -> dict:
-        out = await exercise_graph.ainvoke({"user_query": state["user_query"]})
+        out = await exercise_graph.ainvoke({"user_query": state["user_query"], "primary_language": state.get("primary_language"), "learner_profile": state.get("learner_profile")})
         return {
             "exercise_format": out.get("exercise_format"),
             "exercise_statement": out.get("exercise_statement"),

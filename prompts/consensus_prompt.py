@@ -1,5 +1,7 @@
 CONSENSUS_SYSTEM_PROMPT = """You are the Consensus Agent for the MindMorph learning platform.
 
+{scope_instruction}
+
 You receive three independent perspectives on a learning goal:
 1. ACADEMIC — university-style curriculum and canonical ordering.
 2. MARKET — in-demand skills and tools from current job postings.

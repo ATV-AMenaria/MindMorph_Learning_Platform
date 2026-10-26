@@ -7,6 +7,7 @@ import type {
   SessionMeta,
   SessionResponse,
   StartSessionResponse,
+  FollowUpResponse,
 } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -28,7 +29,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     const detail = body?.detail;
-    if (res.status === 409) throw new LockedError(detail?.pending ?? []);
+    if (res.status === 409 && detail?.error === "locked") throw new LockedError(detail?.pending ?? []);
     // 503 (and friends) carry a safe string message — surface it verbatim for the UI to show.
     throw new Error(typeof detail === "string" ? detail : `Request failed (${res.status}).`);
   }
@@ -59,6 +60,13 @@ async function readSseFrames(res: Response, onFrame: (evt: any) => boolean | voi
 }
 
 export const api = {
+  getFollowUp(query: string) {
+    return req<FollowUpResponse>("/sessions/followup", {
+      method: "POST",
+      body: JSON.stringify({ query }),
+    });
+  },
+
   createSession(userId: string, query: string, formatType = "B") {
     return req<StartSessionResponse>("/sessions", {
       method: "POST",
@@ -83,11 +91,11 @@ export const api = {
     );
   },
 
-  grade(userId: string, sessionId: string, nodeId: string, solution: string) {
+  grade(userId: string, sessionId: string, nodeId: string, solution: string, exerciseRevision?: string) {
     const q = new URLSearchParams({ node_id: nodeId }).toString();
     return req<SessionResponse>(
       `/sessions/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}/grade?${q}`,
-      { method: "POST", body: JSON.stringify({ solution }) },
+      { method: "POST", body: JSON.stringify({ solution, exercise_revision: exerciseRevision }) },
     );
   },
 
@@ -149,7 +157,11 @@ export const api = {
     userId: string,
     query: string,
     formatType: string,
-    cb: {
+    opts: {
+      preferences?: Record<string, string>;
+      primary_language?: string | null;
+      scope?: string;
+      domain?: string;
       onStage: (stage: string, label: string) => void;
       onDone: (res: StartSessionResponse) => void;
       onError: (m: string) => void;
@@ -158,10 +170,18 @@ export const api = {
     const res = await fetch(`${BASE}/sessions/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: userId, query, format_type: formatType }),
+      body: JSON.stringify({ 
+        user_id: userId, 
+        query, 
+        format_type: formatType,
+        preferences: opts.preferences,
+        primary_language: opts.primary_language,
+        scope: opts.scope,
+        domain: opts.domain,
+      }),
     });
     if (!res.ok || !res.body) {
-      cb.onError(`Request failed (${res.status}).`);
+      opts.onError(`Request failed (${res.status}).`);
       return;
     }
     let finished = false;
@@ -170,18 +190,18 @@ export const api = {
       (evt: { stage?: string; label?: string; done?: boolean; session?: StartSessionResponse; error?: string }) => {
         if (evt.error) {
           finished = true;
-          cb.onError(evt.error);
+          opts.onError(evt.error);
           return true;
         }
         if (evt.done) {
           finished = true;
-          cb.onDone(evt.session as StartSessionResponse);
+          opts.onDone(evt.session as StartSessionResponse);
           return true;
         }
-        if (evt.stage) cb.onStage(evt.stage, evt.label ?? evt.stage);
+        if (evt.stage) opts.onStage(evt.stage, evt.label ?? evt.stage);
       },
     );
-    if (!finished) cb.onError("Stream ended unexpectedly.");
+    if (!finished) opts.onError("Stream ended unexpectedly.");
   },
 
   // Multipart upload — must NOT set Content-Type (the browser sets the multipart boundary), so this

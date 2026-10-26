@@ -51,12 +51,15 @@ the failed node locked — it's never silently left open. Lock state itself isn'
 recomputed on every read from the graph plus mastery state (`services/completion.py`), so it can't drift
 out of sync.
 
-**Code is graded live, in the browser.** A Monaco editor (`web/components/CodeEditor.tsx`) collects the
-submission, `tools/code_executor.py` runs its unit tests in a subprocess with a wall-clock timeout and
-a secret-scrubbed environment, and the Reviewer agent critiques the result — no copy-pasting into a
-separate terminal. That subprocess is a hang-guard for a local single-user prototype, **not a security
-sandbox**; real isolation is a hosted-deployment item. Non-Python exercises and case
-studies fall back to LLM rubric grading. A separate, optional in-browser JupyterLite scratchpad
+**Code is submitted in the browser and graded by the backend.** A Monaco editor
+(`web/components/CodeEditor.tsx`) collects the submission. `tools/code_executor.py` runs Python tests,
+Node.js JavaScript tests, or SQLite SQL assertions with a wall-clock timeout and a secret-scrubbed
+environment. Async tests must complete, empty test modules cannot earn credit, and scores come from
+validated result files rather than learner stdout. Broken grading artifacts report “not graded” and
+leave mastery unchanged. This subprocess is a hang-guard for a local single-user prototype, **not a
+security sandbox**; real isolation is a hosted-deployment item. JavaScript grading requires Node.js
+20. SQL exercises currently ask the learner to create the required schema/data; verification SELECTs
+check the result. Case studies use LLM rubric grading. A separate, optional in-browser JupyterLite scratchpad
 (`web/components/Sandbox.tsx`) is for free experimentation only — the graded submission always goes
 through the editor above.
 
@@ -164,6 +167,10 @@ the headroom. Keep the model on the OpenAI OSS family; Groq has deprecated its L
 
 For the durable path: `docker compose up -d db && conda run -n mindmorph alembic upgrade head`, then
 start the backend without `MINDMORPH_STORE=memory`.
+Run `alembic upgrade head` after pulling schema changes, including `0003_session_revision`.
+The API does not auto-create or migrate tables. `/health` checks the running process; `/ready`
+checks database connectivity and migration state (memory mode reports `durable: false`).
+Database errors return 503; overlapping stale saves return 409 and require reload/retry.
 
 ### Observability (LangSmith)
 

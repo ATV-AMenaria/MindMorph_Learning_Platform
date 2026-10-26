@@ -198,7 +198,7 @@ async def test_exercise_graph_grounding_failure_is_also_logged(monkeypatch, capl
     from graph.exercise_graph import build_exercise_graph
 
     format_selector = MagicMock()
-    format_selector.select_format.return_value = MagicMock(format="coding_challenge", reasoning="r")
+    format_selector.select_format.return_value = MagicMock(format="coding_challenge", reasoning="r", language="python")
     synthesizer = MagicMock()
     synthesizer.synthesize.return_value = "EXERCISE_STATEMENT"
     grader = MagicMock()
@@ -240,7 +240,7 @@ async def test_zero_job_items_warns_loudly_and_consensus_proceeds(monkeypatch, c
     assert "Academic + Practical only" in msg                    # names what it was built from
     # Consensus still ran, from two of three perspectives, and the session is intact.
     consensus.build_skill_graph.assert_called_once_with(
-        "learn ML", "ACADEMIC_RESULT", None, "PRACTICAL_RESULT"
+        "learn ML", "ACADEMIC_RESULT", None, "PRACTICAL_RESULT", scope_instruction=""
     )
     assert state["market_output"] is None
     assert state["skill_graph"]["summary"] == "roadmap"
