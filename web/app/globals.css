@@ -24,7 +24,11 @@
   --color-mastered: oklch(78% 0.14 165);
   --color-progress: oklch(80% 0.13 80);
   --color-review: oklch(72% 0.17 25);
-  --color-blocked: oklch(55% 0.02 270);
+  /* Raised from 55% → 74% lightness: at 55% the "Locked" status text (11px) fell below WCAG AA
+     (~3.6:1 on the ink-850 surface, and further diluted by the locked card's opacity) — see
+     SkillGraph.tsx's `data.locked` opacity, raised from 0.45 → 0.7 alongside this. Still visibly the
+     dimmest/most muted of the status colors, just no longer illegible. */
+  --color-blocked: oklch(74% 0.02 270);
   --color-available: oklch(72% 0.1 270);
 
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
@@ -88,6 +92,73 @@ body {
   display: none;
 }
 
+/* Adaptive skill graph rewire (remedial nodes on a sub-40 grade re-rank the whole dagre layout).
+   xyflow applies each node's position as an inline `transform` on this wrapper and never remounts it
+   (stable ids), so a single transition here is enough to glide EVERY existing node to its new spot
+   instead of snapping — no tween loop needed.
+
+   Deliberately NOT `--ease-out-expo` (the app default, used elsewhere): that curve front-loads ~45%
+   of the travel into the first 13ms, so a 300ms position tween reads as an instant jump followed by
+   an imperceptible settle. A longer, gentler curve lets the eye actually track the node moving. */
+.react-flow__node {
+  transition: transform 500ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* One-shot entrance for a newly-added remedial/unlock node, applied to the INNER card (never the
+   `.react-flow__node` wrapper above — animating both would collide/fight over `transform`). Multiple
+   nodes added by one adaptation are staggered via an inline `animation-delay` (see SkillGraph.tsx) so
+   two insertions never pop in on the same frame. */
+@keyframes skill-node-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+  60% {
+    transform: scale(1.04);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Gold pulse-glow ring — the single biggest lever for "something just changed", since it draws the
+   eye even on renders where dagre doesn't need to move anything else. Chained after the entrance
+   (same stagger delay, offset by the entrance duration — see SkillGraph.tsx) and carries no fill-mode,
+   so once it finishes the property fully releases back to the node's own inline mastered/selected
+   glow instead of pinning it to the pulse's resting frame. */
+@keyframes skill-node-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 oklch(80% 0.12 85 / 0);
+  }
+  35% {
+    box-shadow:
+      0 0 0 5px oklch(80% 0.12 85 / 0.4),
+      0 0 34px 6px oklch(80% 0.12 85 / 0.45);
+  }
+}
+
+.skill-node-enter {
+  animation:
+    skill-node-enter 580ms var(--ease-out-expo) both,
+    skill-node-glow 1300ms ease-out;
+}
+
+/* New prerequisite/unlock edges fade in rather than snapping into place instantly. Applied to the
+   xyflow edge's `<g>` wrapper via the Edge object's `className`. */
+@keyframes skill-edge-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.skill-edge-enter {
+  animation: skill-edge-enter 500ms ease-out both;
+}
+
 /* ── Lesson prose (dark luxury) ────────────────────────────────────────────
    Readable rhythm + a clearly-separated monospace code block, so lessons stop
    reading as one mushed wall and code stands apart from prose. */
@@ -146,3 +217,101 @@ body {
   font-size: 0.875rem;
   line-height: 1.6;
 }
+
+/* ── Lesson skeleton loader ────────────────────────────────────────────────
+   Rich shimmer animation that matches the real LessonPanel layout, preventing
+   layout shift during the 15-30s LLM compose wait. */
+
+@keyframes shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.skeleton-line {
+  background: linear-gradient(
+    90deg,
+    oklch(22% 0.016 270 / 0.6) 0%,
+    oklch(30% 0.018 270 / 0.8) 40%,
+    oklch(22% 0.016 270 / 0.6) 80%
+  );
+  background-size: 800px 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+  border-radius: 6px;
+}
+
+.skeleton-block {
+  background: linear-gradient(
+    90deg,
+    oklch(20% 0.014 270 / 0.5) 0%,
+    oklch(26% 0.016 270 / 0.7) 40%,
+    oklch(20% 0.014 270 / 0.5) 80%
+  );
+  background-size: 800px 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+  border: 1px solid oklch(100% 0 0 / 0.04);
+}
+
+.lesson-skeleton-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid oklch(100% 0 0 / 0.1);
+  border-top-color: var(--color-gold-dim);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.animate-fade-in {
+  animation: fade-in 400ms var(--ease-out-expo) both;
+}
+
+/* ── Follow-up step card transitions ──────────────────────────────────────── */
+
+@keyframes followup-slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes followup-slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.followup-card-enter {
+  animation-duration: 350ms;
+  animation-timing-function: var(--ease-out-expo);
+  animation-fill-mode: both;
+}
+

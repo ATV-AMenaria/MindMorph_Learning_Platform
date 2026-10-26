@@ -34,7 +34,7 @@ class SynthesizerAgent:
     '''Merges a creative draft with factual findings into the final lesson.'''
 
     def __init__(self, push_to_langsmith: bool = False):
-        self.llm = get_chat_model("complex")  # large free-text merge → Sonnet on fallback
+        self.llm = get_chat_model("default")  # interactive lesson-generation path
         system_template = SystemMessagePromptTemplate.from_template(SYNTHESIZER_SYSTEM_PROMPT)
         human_template = HumanMessagePromptTemplate.from_template(_HUMAN_TEMPLATE)
         self.chat_prompt = ChatPromptTemplate.from_messages([system_template, human_template])

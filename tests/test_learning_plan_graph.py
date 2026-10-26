@@ -86,7 +86,7 @@ async def test_scout_route_runs_full_learning_plan(monkeypatch):
     assert consensus.build_skill_graph.call_count == 1
     # Consensus saw all three perspectives.
     consensus.build_skill_graph.assert_called_once_with(
-        "learn ML", "ACADEMIC_RESULT", "JOB_SUMMARY", "PRACTICAL_RESULT"
+        "learn ML", "ACADEMIC_RESULT", "JOB_SUMMARY", "PRACTICAL_RESULT", scope_instruction=""
     )
     # Reviewer runs after consensus, exactly once.
     assert reviewer.review_skill_graph.call_count == 1
@@ -123,7 +123,7 @@ async def test_content_route_runs_dual_path(monkeypatch):
     assert state["creative_draft"] == "CREATIVE_DRAFT"
     assert state["factual_findings"] == "FACTUAL_FINDINGS"
     assert state["final_content"] == "FINAL_LESSON"
-    content.generate_content.assert_called_once_with("Python lists", "B", remediation=None, context=None)
+    content.generate_content.assert_called_once_with("Python lists", "B", remediation=None, context=None, primary_language=None)
     synthesizer.synthesize.assert_called_once_with("Python lists", "CREATIVE_DRAFT", "FACTUAL_FINDINGS")
 
 
@@ -140,7 +140,7 @@ async def test_exercise_route_runs_exercise_subgraph(monkeypatch):
     consensus = MagicMock()
 
     format_selector = MagicMock()
-    format_selector.select_format.return_value = MagicMock(format="coding_challenge", reasoning="r")
+    format_selector.select_format.return_value = MagicMock(format="coding_challenge", reasoning="r", language="python")
     exercise_synthesizer = MagicMock()
     exercise_synthesizer.synthesize.return_value = "EXERCISE_STATEMENT"
     grader = MagicMock()
@@ -170,3 +170,91 @@ async def test_exercise_route_runs_exercise_subgraph(monkeypatch):
     scout.generate_specialized_queries.assert_not_called()
     consensus.build_skill_graph.assert_not_called()
     assert "skill_graph" not in state
+
+
+async def test_astream_session_emits_stage_per_node_in_graph_order(monkeypatch):
+    """astream_session streams over the SAME compiled graph as start_session (no separate graph
+    construction) — proves stage frames arrive in real topological order and the terminal frame's
+    learning_session matches what ainvoke would have produced."""
+    import services.learning_service as svc
+
+    monkeypatch.setattr(svc, "_get_assessment_agent", lambda: type(
+        "NoAssessment", (), {"assess": lambda self, sg_json: None}
+    )())
+    monkeypatch.setattr(glp, "_fetch_github_repos", AsyncMock(return_value=None))
+
+    orchestrator = MagicMock()
+    orchestrator.route_query.return_value = MagicMock(Assigned_Agent="SCOUT", Reasoning="r")
+    academic = MagicMock()
+    academic.provide_academic_roadmap.return_value = MagicMock(content="ACADEMIC_RESULT")
+    practical = MagicMock()
+    practical.provide_practical_advice.return_value = MagicMock(content="PRACTICAL_RESULT")
+    consensus = _mock_consensus()
+    reviewer = _mock_reviewer()
+
+    graph = build_graph(
+        orchestrator=orchestrator,
+        scout=_mock_scout(),
+        academic=academic,
+        market=_mock_market(),
+        practical=practical,
+        consensus=consensus,
+        reviewer=reviewer,
+    )
+    monkeypatch.setattr(svc, "_get_orchestration_graph", lambda: graph)
+
+    events = [e async for e in svc.astream_session("learn ML")]
+
+    stage_events = [e for e in events if "stage" in e]
+    stages = [e["stage"] for e in stage_events]
+    # orchestrator first, reviewer last; the three specialists fan out from scout (any relative order
+    # among themselves, since LangGraph doesn't guarantee sibling ordering within a superstep) then
+    # fan in to consensus.
+    assert stages[0] == "orchestrator"
+    assert stages[1] == "scout"
+    assert set(stages[2:5]) == {"academic", "market", "practical"}
+    assert stages[5:] == ["consensus", "reviewer"]
+    assert all(e["label"] for e in stage_events)  # every stage carries a human-readable label
+
+    terminal = events[-1]
+    assert "result" in terminal
+    result = terminal["result"]
+    assert result["route"] == "SCOUT"
+    ls = result["learning_session"]
+    assert ls is not None
+    assert ls["skill_graph"]["summary"] == "roadmap"
+    assert ls["academic_output"] == "ACADEMIC_RESULT"
+
+
+async def test_astream_session_content_route_short_circuits_like_start_session(monkeypatch):
+    """The important subtlety from the brief: CONTENT (and EXERCISE) routes short-circuit past the
+    specialist pipeline in start_session's post-loop routing — astream_session must route the SAME
+    way via the shared `_route_final_state` helper, not duplicate/diverge on it."""
+    import services.learning_service as svc
+
+    monkeypatch.setenv("MINDMORPH_RICH_CONTENT", "0")
+    orchestrator = MagicMock()
+    orchestrator.route_query.return_value = MagicMock(Assigned_Agent="CONTENT", Reasoning="r")
+
+    content = MagicMock()
+    content.generate_content.return_value = "CREATIVE_DRAFT"
+    factual = MagicMock()
+    factual.gather_facts.return_value = "FACTUAL_FINDINGS"
+    synthesizer = MagicMock()
+    synthesizer.synthesize.return_value = "FINAL_LESSON"
+
+    graph = build_graph(
+        orchestrator=orchestrator,
+        content=content,
+        factual=factual,
+        synthesizer=synthesizer,
+    )
+    monkeypatch.setattr(svc, "_get_orchestration_graph", lambda: graph)
+
+    events = [e async for e in svc.astream_session("Python lists", "B")]
+
+    terminal = events[-1]
+    result = terminal["result"]
+    assert result["route"] == "CONTENT"
+    assert result["final_content"] == "FINAL_LESSON"
+    assert result["learning_session"] is None  # CONTENT never persists a learning_session

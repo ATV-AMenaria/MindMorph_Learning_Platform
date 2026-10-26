@@ -6,17 +6,42 @@ only type the thin request envelopes and list metadata.
 """
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+from services.learner_profile import make_profile
 
 
 class CreateSessionRequest(BaseModel):
     user_id: str = Field(..., min_length=1)
     query: str = Field(..., min_length=1)
     format_type: str = "B"
+    preferences: Optional[dict] = None
+    primary_language: Optional[str] = None
+    scope: Optional[str] = None
+    domain: Optional[str] = None
+
+    @model_validator(mode="after")
+    def normalize_profile(self):
+        profile = make_profile(self.preferences, self.primary_language, self.scope, self.domain, self.query)
+        self.domain = profile.get("domain")
+        self.primary_language = profile.get("primary_language")
+        self.scope = profile.get("scope")
+        return self
+
+
+class FollowUpRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+
+
+class FollowUpResponse(BaseModel):
+    questions: list[dict]
+    detected_domain: str
+    detected_language: Optional[str] = None
+    detected_specialization: Optional[str] = None
 
 
 class GradeRequest(BaseModel):
     solution: str
+    exercise_revision: Optional[str] = None
 
 
 class IngestResponse(BaseModel):
@@ -64,3 +89,11 @@ class StartSessionResponse(BaseModel):
 class SessionResponse(BaseModel):
     session_id: str
     learning_session: dict[str, Any]
+    # Ids of any remedial/unlock nodes an adaptation just added to the graph (empty for every response
+    # except the grade call that triggered it) — lets the client animate the rewire instead of it
+    # looking like a silent snap to a new layout.
+    new_node_ids: list[str] = Field(default_factory=list)
+    # This submission's grade dict (grade responses only). Sent separately from
+    # node_state.last_feedback because adaptation clears that field on the remediation path, and the
+    # learner still has to be able to read the score and feedback that failed them.
+    grade_result: Optional[dict[str, Any]] = None

@@ -1,102 +1,201 @@
 # MindMorph Learning Platform
 
-## Environment Setup
+**Online courses give everyone the same path. MindMorph builds a different one per learner, and won't let you move on until you've proven you understand.**
 
-### 1. Prerequisites
+A multi-agent learning platform built on LangGraph: 16 specialised agents compose into 4 graph workflows that research a topic, draft a personalised skill graph, teach each unit on demand, set exercises, grade your work, and grow the graph around whatever you actually got wrong.
 
-Ensure you have [Conda](https://docs.conda.io/en/latest/) installed (Anaconda or Miniconda), or use a standard Python 3.11+ virtual environment.
+![A learner's exercise scores 0%, locking the failed skill node while the graph grows two new gold remedial prerequisite nodes beside it](docs/media/rewire_hero.gif)
 
-### 2. Create and Activate Virtual Environment
+A failing grade locks the node and grows two new prerequisite nodes ahead of it — the graph adapting to what the learner actually got wrong.
 
-Using Conda:
+Captured footage of the adaptive rewire in action: `docs/media/rewire_demo.mp4` (before/after stills:
+`rewire_before.png`, `rewire_after.png`).
 
-```bash
-# Create a new conda environment named 'mindmorph' with Python 3.11
-conda create -n mindmorph python=3.11 -y
+[![tests](https://github.com/tarunlnmiit/MindMorph_Learning_Platform/actions/workflows/tests.yml/badge.svg)](https://github.com/tarunlnmiit/MindMorph_Learning_Platform/actions/workflows/tests.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![LangGraph](https://img.shields.io/badge/built%20with-LangGraph-1a1530)](https://langchain-ai.github.io/langgraph/)
 
-# Activate the environment
-conda activate mindmorph
+---
+
+## How it works
+
+```mermaid
+flowchart LR
+    A["Learner goal"] --> B["Orchestrator"]
+    B --> C["Scout · Academic · Market · Practical<br/>research the topic"]
+    C --> D["Consensus · Reviewer<br/>drafts the skill graph"]
+    D --> E["lesson_graph<br/>Tutor teaches a unit"]
+    E --> F["exercise_graph<br/>Exercise + grading"]
+    F --> G{"Mastery<br/>threshold met?"}
+    G -->|"score < 40"| H["skill_graph_adapt<br/>inserts remedial nodes"]
+    H --> E
+    G -->|"score 40-79"| E
+    G -->|"score >= 80"| I["Next unit unlocked"]
 ```
 
-Or using venv:
+**Progression is gated on demonstrated mastery, not on clicking Next.** `services/mastery.py` scores
+each attempt, and the outcome is decided in Python, not the LLM:
+
+- **Score ≥ 80** — mastered. Downstream nodes that depended on it unlock.
+- **Score 40–79** — a deliberate no-op. You just retry the node.
+- **Score < 40** — the node is locked and the graph grows: an LLM proposes remedial sub-skill nodes,
+  inserted as new prerequisites beneath the failed node. Clearing them unlocks it again.
+
+The LLM only ever proposes *what* to add. Adaptation is additive-only — it never renames, reorders, or
+deletes an existing node, so a struggling learner never loses progress already made. That invariant is
+enforced twice: as a prompt instruction, and mechanically in `apply_adaptation`
+(`graph/skill_graph_adapt.py`), which drops edges pointing at unknown ids and refuses to overwrite an
+existing node id. If the remediation LLM call fails outright, a `remediation_pending` flag still keeps
+the failed node locked — it's never silently left open. Lock state itself isn't stored anywhere; it's
+recomputed on every read from the graph plus mastery state (`services/completion.py`), so it can't drift
+out of sync.
+
+**Code is submitted in the browser and graded by the backend.** A Monaco editor
+(`web/components/CodeEditor.tsx`) collects the submission. `tools/code_executor.py` runs Python tests,
+Node.js JavaScript tests, or SQLite SQL assertions with a wall-clock timeout and a secret-scrubbed
+environment. Async tests must complete, empty test modules cannot earn credit, and scores come from
+validated result files rather than learner stdout. Broken grading artifacts report “not graded” and
+leave mastery unchanged. This subprocess is a hang-guard for a local single-user prototype, **not a
+security sandbox**; real isolation is a hosted-deployment item. JavaScript grading requires Node.js
+20. SQL exercises currently ask the learner to create the required schema/data; verification SELECTs
+check the result. Case studies use LLM rubric grading. A separate, optional in-browser JupyterLite scratchpad
+(`web/components/Sandbox.tsx`) is for free experimentation only — the graded submission always goes
+through the editor above.
+
+## Architecture notes
+
+- **16 agents, one composition layer.** Agents in `agents/` are single-responsibility and know nothing
+  about each other; `graph/` wires them into 4 `StateGraph` workflows (learning plan, lesson, content,
+  exercise), plus the skill-graph renderer and the additive-merge half of adaptation described above.
+  Adding a teaching strategy means adding a graph, not editing an agent.
+- **The vector store is deliberately swappable.** Default is `InMemoryVectorStore` with local `fastembed`
+  embeddings, so the platform runs with no vector-DB account and no embedding API cost. Set
+  `MINDMORPH_STORE=postgres` and the same interface persists to pgvector. `rag/store.py` and
+  `rag/pg_store.py` share one contract — callers never change.
+- **Runs with no API key; goes fast when you give it one.** `config.get_chat_model` picks the backend
+  and `llm_providers.py` owns the failover. With no keys it is a local [Ollama](https://ollama.com)
+  install — `qwen2.5:7b` for interactive beats (lesson generation, grading, tutor chat, orchestrator
+  routing) and `qwen2.5:14b` for reasoning-heavy, once-per-session work (skill-graph consensus, review,
+  scout planning). Set `GROQ_API_KEYS` and hosted [Groq](https://groq.com) inference goes in front of
+  it: the keys are a pool, and a rate-limited (429), token-capped (413) or rejected (401) key rotates
+  to the next one mid-call. Exhaust the pool and it lands on local Ollama rather than failing. A
+  *permanent* error — above all a 404 model-not-found — is not rotated: it logs at ERROR and falls
+  back immediately, because every key would fail identically.
+- **MCP as a tool transport.** `tools/github_mcp_client.py` talks to MCP servers via
+  `langchain-mcp-adapters`, with an explicit timeout wrapper in `tools/mcp_timeout.py` — a hung tool call
+  can't stall a graph.
+- **Postgres is the system of record when durability is on.** SQLAlchemy 2 models under `persistence/`,
+  migrations via Alembic, FastAPI routes in `api/`. For local dev, `MINDMORPH_STORE=memory` skips all of
+  that and keeps sessions in memory for the process lifetime.
+
+## Run it in two minutes
+
+**No API key required.** Out of the box the LLM is a local Ollama model — no vendor account, no key, no
+infra beyond Ollama itself, no Docker, no Postgres, no Alembic, no build step to start. Everything
+below works exactly as written with zero credentials.
 
 ```bash
-# Unix/macOS
-python -m venv .venv && source .venv/bin/activate
-# Windows
-python -m venv .venv && .venv\Scripts\activate
-```
+git clone https://github.com/tarunlnmiit/MindMorph_Learning_Platform.git
+cd MindMorph_Learning_Platform
 
-### 3. Install Dependencies
-
-```bash
+conda create -n mindmorph python=3.11 -y && conda activate mindmorph   # or: python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-```
 
-### 4. Environment Configuration
+# Install Ollama (https://ollama.com/download), then pull both tier models
+ollama pull qwen2.5:7b
+ollama pull qwen2.5:14b
 
-1.  Create a `.env` file in the root directory.
-2.  Add your Groq and LangSmith API keys (required for the LLMs and tracing):
-
-```env
-GROQ_API_KEY=your_api_key_here
-```
-
-## Running the App
-
-MindMorph is a **Next.js** frontend (`web/`) over a **FastAPI** backend (`api/`). The legacy Streamlit
-prototype was retired in P3 #12.
-
-```bash
-# 1. Backend (FastAPI) — zero-infra in-memory store for local dev
+# Backend — zero-infra in-memory store
 MINDMORPH_STORE=memory conda run -n mindmorph uvicorn api.main:app --port 8000
-# (for durable Postgres + pgvector: docker compose up -d db && conda run -n mindmorph alembic upgrade head)
 
-# 2. Frontend (Next.js), in another terminal
-cd web && npm install && npm run dev   # http://localhost:3000
+# Frontend, in another terminal
+cd web && npm install && npm run dev
 ```
 
-Optional: `MINDMORPH_RAG=1` enables knowledge-base grounding; `NEXT_PUBLIC_JUPYTERLITE_URL` overrides the
-in-lesson scratchpad REPL.
+Opens at `http://localhost:3000`. Sessions live in memory for the process lifetime; see below for the
+durable Postgres/RAG setup.
 
-## Running the Agents
+### Optional: hosted inference, for when local is too slow
 
-- Run orchestrator (recommended first):
-    - `python orchestrator_agent.py`
-- Run scout:
-    - `python scout_agent.py`
-- Run market:
-    - `python market_agent.py`
-- Run github MCP client:
-    - `python github_mcp_client.py`
-
-## Running the Content Generator
-
-The Content Generator Agent allows you to generate educational content in different formats (Boost, Builder, Sprint).
-
-To run the interactive agent:
+Local inference is free but slow — a full skill-graph build takes minutes on `qwen2.5:14b`. If you want
+speed, put [Groq](https://console.groq.com/keys) in front of it. It stays optional: remove the keys and
+you are back on Ollama with no other change.
 
 ```bash
-python agents/content_generator/content_agent.py
+# .env — one or more free-tier keys, comma-separated. Rotation multiplies the per-key quota.
+GROQ_API_KEYS=gsk_yourfirstkey,gsk_yoursecondkey,gsk_yourthirdkey
 ```
 
-### Usage
+That's the whole setup — the provider defaults to `groq` as soon as keys are present, and to `ollama`
+when they aren't. Measured on Groq via `scripts/live_smoke.py`: orchestrator routing `0.4–0.8s`, a
+seven-node skill-graph consensus build `2.8s`, first tutor token `1.0s`.
 
-1.  Open `agents/content_generator/content_agent.py` in your editor.
-2.  Scroll to the bottom of the file to the `__main__` block.
-3.  Manually modify the `generate_content` call with your **Topic** and **Format** ("A", "B", or "C"):
+Free-tier quota is metered **per key, per model** (for `openai/gpt-oss-120b`: 30 requests/min, 1K
+requests/day, 8K tokens/min, 200K tokens/day), which is why the pool exists — five keys is roughly 5x
+the headroom. Keep the model on the OpenAI OSS family; Groq has deprecated its Llama models.
 
-    ```python
-    # Format Options:
-    # "A": 5-min Boost (Quick summary)
-    # "B": 20-min Builder (Standard lesson)
-    # "C": 2-hour Sprint (Deep dive)
+### Configuration
 
-    lesson = agent.generate_content("Your Topic Here", "A")
-    ```
+| Variable | Default | Purpose |
+|---|---|---|
+| `GROQ_API_KEYS` | unset | Comma-separated Groq key pool. Unset → local Ollama only, no key needed |
+| `MINDMORPH_LLM_PROVIDER` | `groq` if keys are set, else `ollama` | Primary backend |
+| `MINDMORPH_LLM_FALLBACK` | `ollama` | Where a Groq call lands when the pool is exhausted or misconfigured |
+| `MINDMORPH_GROQ_MODEL` | `openai/gpt-oss-120b` | Fast tier when Groq is active |
+| `MINDMORPH_GROQ_MODEL_COMPLEX` | `openai/gpt-oss-120b` | Quality tier when Groq is active |
+| `MINDMORPH_OLLAMA_MODEL` | `qwen2.5:7b` | Fast tier — interactive beats |
+| `MINDMORPH_OLLAMA_MODEL_COMPLEX` | `qwen2.5:14b` | Quality tier — reasoning-heavy, once-per-session work |
+| `MINDMORPH_OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint |
+| `MINDMORPH_STORE` | `postgres` | Set to `memory` for zero-infra dev (as the quickstart does); the unset default is the durable Postgres store |
+| `DATABASE_URL` | `postgresql+psycopg://mindmorph:mindmorph@localhost:5432/mindmorph` | Matches `docker-compose.yml`, used when `MINDMORPH_STORE=postgres` |
+| `MINDMORPH_RAG` | off | Toggles knowledge-base retrieval grounding |
+| `MINDMORPH_KNOWLEDGE_DIR` | `knowledge_base/` | Corpus loaded into the vector store at startup |
+| `NEXT_PUBLIC_JUPYTERLITE_URL` | hosted JupyterLite demo | Overrides the in-lesson scratchpad REPL |
 
-4.  Run the script:
+For the durable path: `docker compose up -d db && conda run -n mindmorph alembic upgrade head`, then
+start the backend without `MINDMORPH_STORE=memory`.
+Run `alembic upgrade head` after pulling schema changes, including `0003_session_revision`.
+The API does not auto-create or migrate tables. `/health` checks the running process; `/ready`
+checks database connectivity and migration state (memory mode reports `durable: false`).
+Database errors return 503; overlapping stale saves return 409 and require reload/retry.
 
-    ```bash
-    python agents/content_generator/content_agent.py
-    ```
+### Programmatic access
+
+```bash
+uvicorn api.main:app --reload      # FastAPI routes in api/routes.py
+```
+
+## Tests
+
+```bash
+MINDMORPH_STORE=memory conda run -n mindmorph python -m pytest tests/ -q
+```
+
+## Project layout
+
+| Path | What lives there |
+|---|---|
+| `agents/` | 16 single-responsibility agents — orchestrator, scout, academic, market, practical, consensus, reviewer, tutor, assessment, exercise, adaptation, content_generator, example_generator, visual_generator, synthesizer, factual |
+| `graph/` | 4 LangGraph workflows composing those agents, plus the skill-graph renderer and the adaptation merge |
+| `rag/` | Embeddings, chunking, in-memory and pgvector stores |
+| `services/` | Mastery scoring, completion, learning-service orchestration |
+| `tools/` | Timeout-guarded code executor, MCP client, scrapers |
+| `api/` | FastAPI layer |
+| `persistence/` | SQLAlchemy models |
+| `web/` | Next.js frontend — Monaco editor, JupyterLite scratchpad |
+
+## Status
+
+Actively developed, single-user, no auth, no deployment story yet. `docs/ARCHITECTURE.md` describes a
+larger target architecture (Kafka, Kubernetes, Pinecone, multi-tenant) than what currently ships — treat
+that document as the roadmap, `docs/IMPLEMENTATION_STATUS.md` as what's actually built, and this README
+as what runs today.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+---
+
+*I turn scattered AI capabilities into tools people can actually run. · Available for AI contract work → [github.com/tarunlnmiit](https://github.com/tarunlnmiit)*

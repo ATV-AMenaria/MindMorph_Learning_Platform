@@ -37,7 +37,7 @@ class GroundednessJudge:
         from config import llm
 
         self.llm = model or llm
-        self.structured_llm = self.llm.with_structured_output(GroundednessScore)
+        self.structured_llm = self.llm.with_structured_output(GroundednessScore, method="json_schema")
         self.chat_prompt = ChatPromptTemplate.from_messages([
             SystemMessagePromptTemplate.from_template(GROUNDEDNESS_SYSTEM_PROMPT),
             HumanMessagePromptTemplate.from_template(GROUNDEDNESS_HUMAN_TEMPLATE),

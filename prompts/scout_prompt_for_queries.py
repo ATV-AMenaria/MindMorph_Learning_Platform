@@ -87,6 +87,32 @@ Output:
   "reasoning": "Covers theoretical foundations, practical interview relevance, and real-world application patterns"
 }}}}
 
+User Query: "Learn fingerstyle acoustic guitar"
+Output:
+{{{{
+  "original_query": "Learn fingerstyle acoustic guitar",
+  "user_context": "Beginner-to-intermediate guitar learner wanting to play fingerstyle, needs chord mastery, finger independence, and tab reading",
+  "sub_agent_queries": {{{{
+    "ACADEMIC": "What is the structured pedagogical progression for acoustic guitar, fretboard theory, and fingerstyle technique?",
+    "MARKET": "What repertoire, standards, and performance skills are popular or expected of fingerstyle acoustic guitarists?",
+    "PRACTICAL": "What fingerpicking patterns, etudes, and practice routines do accomplished guitarists recommend?"
+  }}}},
+  "reasoning": "Explores music theory / posture foundation, popular performance styles, and daily practice routines"
+}}}}
+
+User Query: "Financial modeling and DCF analysis for corporate finance"
+Output:
+{{{{
+  "original_query": "Financial modeling and DCF analysis for corporate finance",
+  "user_context": "Business or finance professional looking to build institutional-grade DCF and valuation models",
+  "sub_agent_queries": {{{{
+    "ACADEMIC": "What accounting principles, corporate finance theory, and valuation methodologies form the core curriculum for financial modeling?",
+    "MARKET": "What financial modeling standards, Excel competencies, and DCF skills are required in investment banking and private equity?",
+    "PRACTICAL": "What real-world 3-statement models, sensitivity tables, and valuation templates are used by corporate analysts?"
+  }}}},
+  "reasoning": "Covers core accounting theory, industry market expectations, and hands-on spreadsheet modeling patterns"
+}}}}
+
 IMPORTANT NOTES
 
 - Always generate queries for ALL three sub-agents

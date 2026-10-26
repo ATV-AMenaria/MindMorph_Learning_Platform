@@ -9,6 +9,7 @@
 # Skill Dependency Graph (JSON), the renderer turns it into Mermaid, and Reviewer checks it.
 # Specialist / content nodes write distinct state keys, so fan-out needs no custom reducer.
 
+import asyncio
 import logging
 import sys
 import os
@@ -33,7 +34,11 @@ from agents.reviewer.reviewer_agent import ReviewerAgent
 from tools.github_mcp_client import MCPClientInitialization
 from graph.content_graph import build_content_graph
 from graph.exercise_graph import build_exercise_graph
+from graph.skill_graph_adapt import prune_dangling_edges
 from graph.skill_graph_render import skill_graph_to_mermaid
+from services.timing import span
+from services.learner_profile import with_profile, is_technical
+from graph.validation import validate_skill_graph
 
 
 class LearningPlanState(TypedDict, total=False):
@@ -42,6 +47,10 @@ class LearningPlanState(TypedDict, total=False):
     format_type: str
     route: str
     reasoning: str
+    learner_profile: Optional[dict]
+    preferences: Optional[dict]
+    primary_language: Optional[str]
+    scope: Optional[str]
     # Learning-plan branch
     scout_queries: dict
     academic_output: Optional[str]
@@ -86,32 +95,60 @@ async def _run_market(market_agent: Any, query: str, location: str = "United Sta
     The Scout MARKET query is a natural-language question; the job actor needs a concise
     role title, so we distill one before searching.
     """
+    # Sub-spans: `graph.market` dominates the build, and the five sub-stages have very
+    # different costs (two Apify round-trips, two LLM calls). Each is timed separately —
+    # a single span around the gather below would report max(), not both legs.
+    async def _init():
+        with span("market.apify.initialize"):
+            return await market_agent.scraper.initialize()
+
+    async def _title():
+        with span("market.llm.title"):
+            return await market_agent.extract_job_title(query)
+
     try:
-        await market_agent.scraper.initialize()
-        job_title = await market_agent.extract_job_title(query)
-        dataset_id = await market_agent.scraper.search_jobs(job_title, location)
+        # Independent: the MCP handshake doesn't need the title, the title doesn't need the client.
+        _, job_title = await asyncio.gather(_init(), _title())
+        with span("market.apify.search"):
+            dataset_id = await market_agent.scraper.search_jobs(job_title, location)
         if not dataset_id:
             return None
-        jobs = await market_agent.scraper.fetch_job_results(dataset_id)
+        with span("market.apify.fetch"):
+            jobs = await market_agent.scraper.fetch_job_results(dataset_id)
         if not jobs:
             return None
-        summary = await market_agent.summarize_job(jobs[0])
-        return {"job": jobs[0], "summary": summary}
+        with span("market.llm.summary"):
+            # All the postings, not jobs[0]: the fetch already returns ten and the round-trip costs
+            # the same either way, so summarizing one discarded nine.
+            summary = await market_agent.summarize_job(jobs)
+        # No raw posting here. services/learning_service.py ships this dict onto the wire and into
+        # the persisted session, and the raw posting carries a named recruiter, their LinkedIn URL
+        # and a contact email — a third party's personal data, stored and transmitted for a field
+        # nothing reads (Consensus takes only `summary`; web/ never references market_output).
+        return {"sampled": len(jobs), "summary": summary}
     except Exception:
         logger.exception("Market node error")
         return None
 
 
 async def _fetch_github_repos(query: str) -> Optional[Any]:
-    """Resilient GitHub MCP lookup. Returns None (no hard failure) when token/network is absent."""
+    """Resilient GitHub MCP lookup. Returns None (no hard failure) when token/network is absent.
+
+    Every ``None`` here becomes a silent ``grounded=False`` downstream, so each way of returning
+    one says why at WARNING — otherwise ungrounded advice is indistinguishable from grounded.
+    """
     try:
         client = MCPClientInitialization()
         if not client.token:
+            logger.warning("GitHub grounding unavailable: GITHUB_PERSONAL_TOKEN is not set")
             return None
         await client.initialize()
-        return await client.search_github_repositories(query)
+        repos = await client.search_github_repositories(query)
+        if not repos:
+            logger.warning("GitHub grounding empty: no repositories returned for %r", query)
+        return repos
     except Exception:
-        logger.exception("GitHub repo fetch error")
+        logger.exception("GitHub grounding failed: repo fetch error")
         return None
 
 
@@ -153,7 +190,8 @@ def build_graph(
     )
 
     def orchestrator_node(state: LearningPlanState) -> dict:
-        resp = orchestrator.route_query(state["user_query"])
+        with span("graph.orchestrator"):
+            resp = orchestrator.route_query(state["user_query"])
         return {"route": resp.Assigned_Agent, "reasoning": resp.Reasoning}
 
     def route_condition(state: LearningPlanState) -> str:
@@ -167,52 +205,115 @@ def build_graph(
         return "placeholder"
 
     def scout_node(state: LearningPlanState) -> dict:
-        out = scout.generate_specialized_queries(state["user_query"])
+        with span("graph.scout"):
+            out = scout.generate_specialized_queries(with_profile(state["user_query"], state.get("learner_profile")))
         return {"scout_queries": _normalize_scout_queries(out)}
 
     def academic_node(state: LearningPlanState) -> dict:
         query = state.get("scout_queries", {}).get("ACADEMIC") or state["user_query"]
-        resp = academic.provide_academic_roadmap(query)
+        with span("graph.academic"):
+            resp = academic.provide_academic_roadmap(with_profile(query, state.get("learner_profile")))
         return {"academic_output": resp.content if resp else None}
 
     async def market_node(state: LearningPlanState) -> dict:
+        if not is_technical(state.get("learner_profile")):
+            return {"market_output": None}
         query = state.get("scout_queries", {}).get("MARKET") or state["user_query"]
-        return {"market_output": await _run_market(market, query)}
+        with span("graph.market"):
+            return {"market_output": await _run_market(market, with_profile(query, state.get("learner_profile")))}
 
     async def practical_node(state: LearningPlanState) -> dict:
         query = state.get("scout_queries", {}).get("PRACTICAL") or state["user_query"]
-        repos = await _fetch_github_repos(query)
-        resp = practical.provide_practical_advice(query, github_repos=repos)
+        with span("graph.practical"):
+            if not is_technical(state.get("learner_profile")):
+                from agents.factual.factual_agent import FactualAgent
+                material = await asyncio.to_thread((factual or FactualAgent()).gather_facts, query)
+                return {"practical_output": material}
+            repos = await _fetch_github_repos(query)
+            # provide_practical_advice uses the SYNC llm.invoke; calling it directly here would block
+            # the event loop for the whole LLM call and stall the concurrently-running Market node.
+            resp = await asyncio.to_thread(practical.provide_practical_advice, with_profile(query, state.get("learner_profile")), github_repos=repos)
         return {"practical_output": resp.content if resp else None}
 
     def consensus_node(state: LearningPlanState) -> dict:
         market_data = state.get("market_output")
         market_text = market_data.get("summary") if market_data else None
-        sg = consensus.build_skill_graph(
-            state["user_query"],
-            state.get("academic_output"),
-            market_text,
-            state.get("practical_output"),
-        )
-        if not sg:
-            return {"skill_graph": None, "skill_graph_mermaid": ""}
+        if not market_text:
+            # Consensus silently substitutes "Not available." — same shape as a grounded run.
+            # Say it out loud, otherwise a degraded skill graph is indistinguishable from a good one.
+            logger.warning(
+                "Consensus degraded: no MARKET grounding for %r "
+                "(job scrape returned nothing or timed out) — skill graph built from Academic + Practical only",
+                state["user_query"],
+            )
+        scope_instruction = ""
+        scope = state.get("scope")
+        lang = state.get("primary_language") or "the detected language"
+        if scope == "focused":
+            scope_instruction = f"The learner wants a FOCUSED path: only include topics directly relevant to their domain. Use {lang} for all code examples. Do NOT include foundational CS topics in other languages."
+        elif scope == "foundation":
+            scope_instruction = "The learner wants a STRONG FOUNDATION path: start with fundamentals of the requested subject, then specialize. Do not add unrelated computer science or programming topics."
+
+        with span("graph.consensus"):
+            sg = consensus.build_skill_graph(
+                with_profile(state["user_query"], state.get("learner_profile")),
+                state.get("academic_output"),
+                market_text,
+                state.get("practical_output"),
+                scope_instruction=scope_instruction,
+            )
+        # Deterministic coherence repair, same invariant apply_adaptation enforces on adaptations:
+        # an edge to a node id the model never emitted becomes an unmasterable prerequisite in
+        # services/completion.py, permanently locking its dependants and making is_session_complete
+        # unreachable. Drop it here — BEFORE the mermaid render and before the Reviewer — so the
+        # persisted graph, the diagram and the review all see the same coherent artifact.
+        graph_dict, dropped = prune_dangling_edges(sg)
+        try:
+            validate_skill_graph(graph_dict)
+        except ValueError as exc:
+            # One bounded repair request, then fail clearly instead of persisting an impossible path.
+            sg = consensus.build_skill_graph(
+                with_profile(state["user_query"], state.get("learner_profile")),
+                state.get("academic_output"), market_text, state.get("practical_output"),
+                scope_instruction=scope_instruction + " Repair structural error: " + str(exc),
+            )
+            graph_dict, dropped = prune_dangling_edges(sg)
+            validate_skill_graph(graph_dict)
+        if dropped:
+            logger.warning(
+                "Consensus graph incoherent for %r: dropped %d edge(s) referencing unknown node ids: %s",
+                state["user_query"], len(dropped),
+                [(e.get("source"), e.get("target")) for e in dropped],
+            )
         return {
-            "skill_graph": sg.model_dump(),
-            "skill_graph_mermaid": skill_graph_to_mermaid(sg),
+            "skill_graph": graph_dict,
+            "skill_graph_mermaid": skill_graph_to_mermaid(graph_dict),
         }
 
     def reviewer_node(state: LearningPlanState) -> dict:
         sg = state.get("skill_graph")
         if not sg:
             return {"review_passed": False, "review_notes": "No skill graph was produced to review."}
-        res = reviewer.review_skill_graph(state["user_query"], json.dumps(sg))
+        with span("graph.reviewer"):
+            res = reviewer.review_skill_graph(state["user_query"], json.dumps(sg))
         if not res:
+            logger.warning("Reviewer failed to evaluate the skill graph for %r", state["user_query"])
             return {"review_passed": False, "review_notes": "Reviewer failed to evaluate the skill graph."}
+        if not res.passed:
+            # The verdict rides along in the payload but no consumer acts on it, so a failed review
+            # was previously indistinguishable from a passing one in the logs. Say it out loud. The
+            # one failure mode we can repair deterministically (dangling edges) is already fixed in
+            # consensus_node above, before the Reviewer sees the graph — this covers everything else,
+            # which needs a human, not an automatic Consensus retry.
+            logger.warning(
+                "Reviewer REJECTED the skill graph for %r (serving it anyway): %s",
+                state["user_query"], res.notes,
+            )
         return {"review_passed": res.passed, "review_notes": res.notes}
 
     async def content_node(state: LearningPlanState) -> dict:
         out = await content_graph.ainvoke(
-            {"user_query": state["user_query"], "format_type": state.get("format_type", "B")}
+            {"user_query": state["user_query"], "format_type": state.get("format_type", "B"), "primary_language": state.get("primary_language"), "learner_profile": state.get("learner_profile")}
         )
         return {
             "creative_draft": out.get("creative_draft"),
@@ -221,7 +322,7 @@ def build_graph(
         }
 
     async def exercise_node(state: LearningPlanState) -> dict:
-        out = await exercise_graph.ainvoke({"user_query": state["user_query"]})
+        out = await exercise_graph.ainvoke({"user_query": state["user_query"], "primary_language": state.get("primary_language"), "learner_profile": state.get("learner_profile")})
         return {
             "exercise_format": out.get("exercise_format"),
             "exercise_statement": out.get("exercise_statement"),

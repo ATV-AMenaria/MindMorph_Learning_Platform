@@ -18,13 +18,21 @@ from langchain_core.outputs import LLMResult
 logger = logging.getLogger(__name__)
 
 # (input $/1M, output $/1M). Verify/update against current vendor pricing.
-# Groq llama-3.3-70b-versatile: published list price at time of writing.
-# Claude CLI aliases (haiku/sonnet) run through the *local* Claude Code OAuth session — a placeholder
-# backend with no metered API cost — so they price at 0.0 until a real API key is wired in.
+#
+# Local Ollama (config.OLLAMA_MODEL default tier, config.OLLAMA_MODEL_COMPLEX complex tier) is
+# self-hosted, so it has no metered API cost and honestly prices at 0.0. That is a real price, not an
+# "unknown model" placeholder: the meter still counts tokens and calls (see TokenMeter) so
+# throughput/usage stays observable even when $/user is $0.
+#
+# Groq gpt-oss-120b (both tiers when GROQ_API_KEYS is set) is metered. Source: Groq's published
+# on-demand pricing for openai/gpt-oss-120b, $0.15/1M input and $0.60/1M output (groq.com/pricing).
+# The free tier bills $0 but is quota-capped, so these numbers are what the same usage would cost on
+# the paid tier — that is the figure the unit-economics gate cares about.
 MODEL_PRICES: dict[str, tuple[float, float]] = {
-    "llama-3.3-70b-versatile": (0.59, 0.79),
-    "haiku": (0.0, 0.0),
-    "sonnet": (0.0, 0.0),
+    "qwen2.5:14b": (0.0, 0.0),
+    "qwen2.5:7b": (0.0, 0.0),
+    "openai/gpt-oss-120b": (0.15, 0.60),
+    "openai/gpt-oss-20b": (0.10, 0.50),
 }
 
 _UNKNOWN_MODEL = "unknown"
@@ -46,7 +54,7 @@ def _model_name(result: LLMResult) -> str:
     name = output.get("model_name") or output.get("model")
     if name:
         return str(name)
-    # Fall back to the per-generation message metadata (ChatGroq stamps it there).
+    # Fall back to the per-generation message metadata (ChatOllama stamps it there).
     for batch in result.generations:
         for gen in batch:
             meta = getattr(getattr(gen, "message", None), "response_metadata", None) or {}
@@ -80,8 +88,9 @@ class TokenMeter(BaseCallbackHandler):
     """Accumulates token usage + estimated cost across every LLM call in one graph invocation.
 
     Attach via ``graph.ainvoke(state, config={"callbacks": [meter]})``; LangChain propagates it to all
-    nested runnables. A call that reports no usage (e.g. the Claude CLI placeholder) sets ``unknown``
-    so a zero cost is never mistaken for a free real call.
+    nested runnables. A call that reports no usage (some responses simply omit ``usage_metadata``)
+    sets ``unknown`` so a zero cost is never mistaken for a free real call. A priced $0 (local
+    Ollama) is not ``unknown`` — it is a real price.
     """
 
     def __init__(self) -> None:

@@ -67,13 +67,19 @@ export function KnowledgeUpload({ userId }: KnowledgeUploadProps) {
         </button>
       </form>
 
+      {/* Screen-reader-only: "Indexing…" is otherwise visible only in the disabled button label, which
+          isn't announced on its own — this covers the wait the same way the dashboard's stage region
+          does. Polite + atomic, cleared once done/error take over (those announce themselves below). */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {upload.isPending ? "Indexing…" : ""}
+      </div>
       {done && (
-        <p className="mt-3 text-sm" style={{ color: "var(--color-gold)" }}>
+        <p role="status" className="mt-3 text-sm" style={{ color: "var(--color-gold)" }}>
           Indexed {done.chunks} passage{done.chunks === 1 ? "" : "s"} from {done.filename}.
         </p>
       )}
       {upload.isError && (
-        <p className="mt-3 text-sm" style={{ color: "var(--color-review)" }}>
+        <p role="alert" className="mt-3 text-sm" style={{ color: "var(--color-review)" }}>
           {upload.error instanceof Error ? upload.error.message : "Upload failed."}
         </p>
       )}

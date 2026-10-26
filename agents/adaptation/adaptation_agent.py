@@ -31,8 +31,8 @@ class AdaptationAgent:
     """Proposes an additive skill-graph adaptation after a node is graded."""
 
     def __init__(self, push_to_langsmith: bool = False):
-        self.llm = get_chat_model("complex")  # structured graph adaptation → Sonnet on fallback
-        self.structured_llm = self.llm.with_structured_output(GraphAdaptation)
+        self.llm = get_chat_model("default")  # fires on the interactive post-grade remediation beat
+        self.structured_llm = self.llm.with_structured_output(GraphAdaptation, method="json_schema")
         system_template = SystemMessagePromptTemplate.from_template(ADAPTATION_SYSTEM_PROMPT)
         human_template = HumanMessagePromptTemplate.from_template(ADAPTATION_HUMAN_TEMPLATE)
         self.chat_prompt = ChatPromptTemplate.from_messages([system_template, human_template])

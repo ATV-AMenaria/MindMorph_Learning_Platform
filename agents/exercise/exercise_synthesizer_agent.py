@@ -22,6 +22,7 @@ from prompts.exercise_synthesizer_prompt import EXERCISE_SYNTHESIZER_SYSTEM_PROM
 
 _HUMAN_TEMPLATE = """Learner goal: {user_query}
 Exercise format: {exercise_format}
+Coding language: {exercise_language}
 
 GITHUB MATERIAL:
 {github_material}
@@ -41,7 +42,7 @@ class ExerciseSynthesizerAgent:
     """Personalizes gathered material into a single practice exercise statement."""
 
     def __init__(self, push_to_langsmith: bool = False):
-        self.llm = get_chat_model("complex")  # the call that hit the Groq 413 → Sonnet on fallback
+        self.llm = get_chat_model("default")  # interactive exercise-generation path
         system_template = SystemMessagePromptTemplate.from_template(EXERCISE_SYNTHESIZER_SYSTEM_PROMPT)
         human_template = HumanMessagePromptTemplate.from_template(_HUMAN_TEMPLATE)
         self.chat_prompt = ChatPromptTemplate.from_messages([system_template, human_template])
@@ -50,6 +51,7 @@ class ExerciseSynthesizerAgent:
         self,
         user_query: str,
         exercise_format: str,
+        exercise_language: Optional[str] = None,
         github_material: Optional[str] = None,
         blog_material: Optional[str] = None,
         dataset_material: Optional[str] = None,
@@ -65,18 +67,15 @@ class ExerciseSynthesizerAgent:
         logger.info(
             "ExerciseSynthesizer: composing %s exercise for %r", exercise_format, user_query
         )
-        try:
-            messages = self.chat_prompt.format_messages(
-                user_query=user_query,
-                exercise_format=exercise_format,
-                github_material=github_material or _NONE,
-                blog_material=blog_material or _NONE,
-                dataset_material=dataset_material or _NONE,
-            )
-            return self.llm.invoke(messages).content
-        except Exception:
-            logger.exception("ExerciseSynthesizer: error composing exercise")
-            return None
+        messages = self.chat_prompt.format_messages(
+            user_query=user_query,
+            exercise_format=exercise_format,
+            exercise_language=exercise_language or "(not applicable)",
+            github_material=github_material or _NONE,
+            blog_material=blog_material or _NONE,
+            dataset_material=dataset_material or _NONE,
+        )
+        return self.llm.invoke(messages).content
 
 
 if __name__ == "__main__":

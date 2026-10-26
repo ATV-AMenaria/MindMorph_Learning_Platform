@@ -2,6 +2,9 @@ langchain
 langgraph
 langchain-mcp-adapters
 langchain_core
+langchain-ollama
+# Hosted-inference lane (optional). Only used when GROQ_API_KEYS is set; the app runs key-free
+# on langchain-ollama alone.
 langchain-groq
 langsmith
 pydantic

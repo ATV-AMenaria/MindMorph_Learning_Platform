@@ -7,6 +7,7 @@ import type {
   SessionMeta,
   SessionResponse,
   StartSessionResponse,
+  FollowUpResponse,
 } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -28,14 +29,44 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     const detail = body?.detail;
-    if (res.status === 409) throw new LockedError(detail?.pending ?? []);
+    if (res.status === 409 && detail?.error === "locked") throw new LockedError(detail?.pending ?? []);
     // 503 (and friends) carry a safe string message — surface it verbatim for the UI to show.
     throw new Error(typeof detail === "string" ? detail : `Request failed (${res.status}).`);
   }
   return res.json() as Promise<T>;
 }
 
+// Shared SSE frame reader: fetch + reader, not EventSource (which is GET-only). Buffers across reads
+// because reader chunks don't align to "\n\n" frame boundaries. `onFrame` returns `true` to stop early
+// (a terminal/error frame); otherwise the loop drains the whole stream.
+async function readSseFrames(res: Response, onFrame: (evt: any) => boolean | void): Promise<void> {
+  if (!res.body) return;
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return;
+    buffer += decoder.decode(value, { stream: true });
+    let sep: number;
+    while ((sep = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      const line = frame.replace(/^data: /, "").trim();
+      if (!line) continue;
+      if (onFrame(JSON.parse(line))) return;
+    }
+  }
+}
+
 export const api = {
+  getFollowUp(query: string) {
+    return req<FollowUpResponse>("/sessions/followup", {
+      method: "POST",
+      body: JSON.stringify({ query }),
+    });
+  },
+
   createSession(userId: string, query: string, formatType = "B") {
     return req<StartSessionResponse>("/sessions", {
       method: "POST",
@@ -60,11 +91,11 @@ export const api = {
     );
   },
 
-  grade(userId: string, sessionId: string, nodeId: string, solution: string) {
+  grade(userId: string, sessionId: string, nodeId: string, solution: string, exerciseRevision?: string) {
     const q = new URLSearchParams({ node_id: nodeId }).toString();
     return req<SessionResponse>(
       `/sessions/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}/grade?${q}`,
-      { method: "POST", body: JSON.stringify({ solution }) },
+      { method: "POST", body: JSON.stringify({ solution, exercise_revision: exerciseRevision }) },
     );
   },
 
@@ -82,8 +113,7 @@ export const api = {
     );
   },
 
-  // Streaming chat (SSE over POST → fetch + reader, not EventSource which is GET-only). Buffers across
-  // reads because reader chunks don't align to "\n\n" frame boundaries.
+  // Streaming chat (SSE over POST). See readSseFrames above for the shared transport.
   async streamChat(
     userId: string,
     sessionId: string,
@@ -103,26 +133,75 @@ export const api = {
       cb.onError(`Chat failed (${res.status}).`);
       return;
     }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let sep: number;
-      while ((sep = buffer.indexOf("\n\n")) !== -1) {
-        const frame = buffer.slice(0, sep);
-        buffer = buffer.slice(sep + 2);
-        const line = frame.replace(/^data: /, "").trim();
-        if (!line) continue;
-        const evt = JSON.parse(line) as { token?: string; done?: boolean; error?: string };
-        if (evt.error) return cb.onError(evt.error);
-        if (evt.done) return cb.onDone();
-        if (evt.token) cb.onToken(evt.token);
+    let finished = false;
+    await readSseFrames(res, (evt: { token?: string; done?: boolean; error?: string }) => {
+      if (evt.error) {
+        finished = true;
+        cb.onError(evt.error);
+        return true;
       }
+      if (evt.done) {
+        finished = true;
+        cb.onDone();
+        return true;
+      }
+      if (evt.token) cb.onToken(evt.token);
+    });
+    if (!finished) cb.onDone();
+  },
+
+  // Streaming session create (SSE over POST): one "stage" frame per LangGraph node (scout, academic,
+  // market, practical, consensus, reviewer, ...) as orchestration runs, then a "done" frame carrying
+  // the same payload shape as createSession's response.
+  async startSessionStream(
+    userId: string,
+    query: string,
+    formatType: string,
+    opts: {
+      preferences?: Record<string, string>;
+      primary_language?: string | null;
+      scope?: string;
+      domain?: string;
+      onStage: (stage: string, label: string) => void;
+      onDone: (res: StartSessionResponse) => void;
+      onError: (m: string) => void;
+    },
+  ): Promise<void> {
+    const res = await fetch(`${BASE}/sessions/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ 
+        user_id: userId, 
+        query, 
+        format_type: formatType,
+        preferences: opts.preferences,
+        primary_language: opts.primary_language,
+        scope: opts.scope,
+        domain: opts.domain,
+      }),
+    });
+    if (!res.ok || !res.body) {
+      opts.onError(`Request failed (${res.status}).`);
+      return;
     }
-    cb.onDone();
+    let finished = false;
+    await readSseFrames(
+      res,
+      (evt: { stage?: string; label?: string; done?: boolean; session?: StartSessionResponse; error?: string }) => {
+        if (evt.error) {
+          finished = true;
+          opts.onError(evt.error);
+          return true;
+        }
+        if (evt.done) {
+          finished = true;
+          opts.onDone(evt.session as StartSessionResponse);
+          return true;
+        }
+        if (evt.stage) opts.onStage(evt.stage, evt.label ?? evt.stage);
+      },
+    );
+    if (!finished) opts.onError("Stream ended unexpectedly.");
   },
 
   // Multipart upload — must NOT set Content-Type (the browser sets the multipart boundary), so this

@@ -7,11 +7,18 @@ import type { NodeStatus, SkillGraph } from "./types";
 
 type StateMap = Record<string, { status: NodeStatus; remediation_pending?: boolean }>;
 
+// Both endpoints must name a real node — the same invariant the backend applies at build time
+// (graph/skill_graph_adapt.prune_dangling_edges drops an edge if EITHER endpoint is unknown) and
+// again at read time (services/completion.prereqs_by_node). An LLM adaptation can emit an edge whose
+// SOURCE is a hallucinated id (the observed case: `mlops_tools`); as a prerequisite it can never be
+// mastered, so its dependants stay locked forever and the raw slug leaks into the lock message and
+// the card's accessible name. Dropping it is only ever removing an unsatisfiable gate — a node left
+// with zero prerequisites is correctly available.
 export function prereqsByNode(graph: SkillGraph): Record<string, Set<string>> {
   const prereqs: Record<string, Set<string>> = {};
   for (const n of graph.nodes) prereqs[n.id] = new Set();
   for (const e of graph.edges ?? []) {
-    if (e.target in prereqs && e.source != null) prereqs[e.target].add(e.source);
+    if (e.target in prereqs && e.source in prereqs) prereqs[e.target].add(e.source);
   }
   return prereqs;
 }
@@ -87,8 +94,8 @@ export interface StatusStyle {
 
 export const STATUS_STYLE: Record<NodeStatus, StatusStyle> = {
   mastered: { label: "Complete", glyph: "✓", color: "var(--color-mastered)" },
-  // 40–79: passed the floor but not the 80 bar — explicitly NOT advancement (downstream stays locked).
-  in_progress: { label: "Keep practicing", glyph: "◐", color: "var(--color-progress)" },
+  // 40–79: passed the floor but not the 80 bar — in progress towards full mastery.
+  in_progress: { label: "In progress", glyph: "◐", color: "var(--color-progress)" },
   needs_review: { label: "Needs review", glyph: "↻", color: "var(--color-review)" },
   blocked: { label: "Locked", glyph: "🔒", color: "var(--color-blocked)" },
   available: { label: "Available", glyph: "○", color: "var(--color-available)" },

@@ -69,7 +69,7 @@ class _BoomAgent:
         return []
 
     async def astream(self, messages):
-        raise RuntimeError("groq down")
+        raise RuntimeError("llm provider down")
         yield  # pragma: no cover (makes this an async generator)
 
 

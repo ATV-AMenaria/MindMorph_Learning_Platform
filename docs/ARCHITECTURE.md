@@ -1,11 +1,12 @@
 # MindMorph — Technical Architecture
 
+> ⚠️ **This is the target architecture, not the current implementation.** For what is actually
+> built today, see [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md).
+>
 > **Source:** transcribed from `MindMorph_detail.pdf`, `Brief Technical Architecture (1).pdf`,
 > and `Detailed Technical Architecture (1).pdf`.
 > **Naming note:** the source PDFs label the product **"SmartLearn"**. That is an older name;
 > the canonical product name is **MindMorph**. All references below use **MindMorph**.
-> This document is the **target/reference architecture** (the design intent). For what is
-> actually built today, see [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md).
 
 ---
 

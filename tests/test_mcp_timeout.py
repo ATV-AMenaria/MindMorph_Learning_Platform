@@ -129,3 +129,42 @@ async def test_job_search_happy_path_returns_dataset_id():
     result = await svc.search_jobs("python dev")
 
     assert result == "ds-abc"
+
+
+# --- JobScraper handshake reuse ------------------------------------------------
+# The connect + get_tools handshake costs ~4.3s and was re-paid on every request even
+# though the service is a per-process singleton. It is now cached — which only stays
+# safe because every failure path clears it, so a wedged client can't survive.
+
+async def test_initialize_reuses_cached_tools_without_rehandshaking():
+    tool = _FakeTool(JobScraperService.SEARCH_TOOL_NAME)
+    svc = JobScraperService()
+    sentinel = object()
+    svc.client = sentinel
+    svc.tools = [tool]
+
+    assert await svc.initialize() is sentinel  # no new MultiServerMCPClient built
+    assert svc.tools == [tool]
+
+
+async def test_job_search_error_clears_cached_tools():
+    class _Boom(_FakeTool):
+        async def ainvoke(self, _payload):
+            raise RuntimeError("actor exploded")
+
+    svc = JobScraperService()
+    svc.client = object()
+    svc.tools = [_Boom(JobScraperService.SEARCH_TOOL_NAME)]
+
+    assert await svc.search_jobs("python dev") is None
+    assert svc.tools == []  # next initialize() re-handshakes instead of reusing a wedged client
+
+
+async def test_job_search_clears_cached_tools_when_the_tool_is_missing():
+    """A handshake that cached a partial tool list must not wedge every later request."""
+    svc = JobScraperService()
+    svc.client = object()
+    svc.tools = [_FakeTool("some-other-tool")]
+
+    assert await svc.search_jobs("python dev") is None
+    assert svc.tools == []

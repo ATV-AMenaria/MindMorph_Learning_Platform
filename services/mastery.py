@@ -35,6 +35,12 @@ def apply_score(ls: dict, node_id: str, fmt: str, result: dict) -> None:
     context. Both coding_challenge and case_study expose 'score' (0–100). Mutates ``ls`` in place to
     mirror the original Streamlit behavior (caller persists the whole ls afterwards).
     """
+    if result.get("harness_error"):
+        # The generated test could not run (missing library, undeclared import, absent data file).
+        # That measures the platform, not the learner: recording it would fabricate a 0, flip the
+        # node to needs_review, lock it and spawn remedial nodes off a meaningless signal. Leave the
+        # node exactly as it was — the caller logs the failure loudly instead.
+        return
     score = float(result.get("score", 0.0) or 0.0)
     old = ls["node_state"].get(node_id, {})
     best_score = max(old.get("best_score", 0), score)

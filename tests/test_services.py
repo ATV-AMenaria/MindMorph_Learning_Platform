@@ -100,7 +100,7 @@ def test_grade_applies_mastery_and_runs_adaptation(monkeypatch):
 
     ls = svc.new_learning_session(_scout_state(), "B")
     svc.open_lesson(ls, "a")
-    svc.grade(ls, "a", "solution code")
+    svc.grade(ls, "a", "solution code", exercise_revision=ls.get("lessons", {}).get("a", {}).get("exercise", {}).get("revision"))
     assert ls["node_state"]["a"]["status"] == "mastered"
     assert ls["node_state"]["a"]["best_score"] == 100
     assert adapt_calls["n"] == 1
@@ -109,7 +109,7 @@ def test_grade_applies_mastery_and_runs_adaptation(monkeypatch):
 def test_grade_without_open_lesson_raises():
     ls = svc.new_learning_session(_scout_state(), "B")
     with pytest.raises(ValueError):
-        svc.grade(ls, "a", "code")
+        svc.grade(ls, "a", "code", exercise_revision=ls.get("lessons", {}).get("a", {}).get("exercise", {}).get("revision"))
 
 
 # --- threshold gating + deterministic remediation lock -----------------------------------------
@@ -142,7 +142,7 @@ def test_grade_40_79_skips_adaptation(monkeypatch):
     agent = _FakeAgent(result=None)
     monkeypatch.setattr(svc, "_get_adaptation_agent", lambda: agent)
     ls = _opened(monkeypatch, 55)
-    svc.grade(ls, "a", "sol")
+    svc.grade(ls, "a", "sol", exercise_revision=ls.get("lessons", {}).get("a", {}).get("exercise", {}).get("revision"))
     assert ls["node_state"]["a"]["status"] == "in_progress"
     assert agent.calls == 0  # 40–79 band makes NO adaptation call
     assert ls["node_state"]["a"]["remediation_pending"] is False
@@ -154,7 +154,7 @@ def test_grade_sub40_locks_even_when_adapt_returns_none(monkeypatch):
     agent = _FakeAgent(result=None)  # LLM "fails" — no remedial nodes
     monkeypatch.setattr(svc, "_get_adaptation_agent", lambda: agent)
     ls = _opened(monkeypatch, 20)
-    svc.grade(ls, "a", "sol")
+    svc.grade(ls, "a", "sol", exercise_revision=ls.get("lessons", {}).get("a", {}).get("exercise", {}).get("revision"))
     assert ls["node_state"]["a"]["status"] == "needs_review"
     assert ls["node_state"]["a"]["remediation_pending"] is True
     assert agent.calls >= 1  # attempted (with bounded retry)
@@ -174,10 +174,48 @@ def test_grade_sub40_adds_remedial_prereq_and_locks(monkeypatch):
     )
     monkeypatch.setattr(svc, "_get_adaptation_agent", lambda: _FakeAgent(result=adaptation))
     ls = _opened(monkeypatch, 20)
-    svc.grade(ls, "a", "sol")
+    svc.grade(ls, "a", "sol", exercise_revision=ls.get("lessons", {}).get("a", {}).get("exercise", {}).get("revision"))
     assert "a_basics" in ls["node_state"]            # remedial prereq seeded
     assert "a" in locked_node_ids(ls["skill_graph"], ls["node_state"])  # locked behind new prereq
     assert "a" not in ls["lessons"]                  # cached lesson invalidated for regeneration
+
+
+def test_grade_sub40_orphaned_remedial_chain_is_still_completable(monkeypatch):
+    """The live qwen2.5:7b regression: the LLM chains remedial nodes only to EACH OTHER
+    (setup_environment -> verify_setup) with NO edge into the graded node. Without the deterministic
+    synthesis in graph/skill_graph_adapt.py this leaves the graded node locked forever (prereqs_by_node
+    is empty, so `satisfied` in services/completion.py:_remediation_locked can never become True). This
+    test proves the dead end is closed: the graded node gets a real prerequisite path, and completing
+    the remedial nodes actually unlocks it."""
+    from agents.adaptation.adaptation_schema import GraphAdaptation
+    from agents.consensus.skill_graph_schema import SkillEdge, SkillNode
+    from services.completion import locked_node_ids
+
+    orphaned_chain = GraphAdaptation(
+        new_nodes=[
+            SkillNode(id="setup_environment", label="Setup Env", description="x", level="foundational"),
+            SkillNode(id="verify_setup", label="Verify Setup", description="x", level="foundational"),
+        ],
+        new_edges=[SkillEdge(source="setup_environment", target="verify_setup", relation="prerequisite")],
+        remediation_focus=["environment setup"],
+        rationale="break it down",
+    )
+    monkeypatch.setattr(svc, "_get_adaptation_agent", lambda: _FakeAgent(result=orphaned_chain))
+    ls = _opened(monkeypatch, 20)
+    svc.grade(ls, "a", "sol", exercise_revision=ls.get("lessons", {}).get("a", {}).get("exercise", {}).get("revision"))
+
+    # Both remedial nodes landed, but the graph as proposed still doesn't reach the graded node — the
+    # synthesis must have added the missing edge from the end of the chain.
+    assert {"setup_environment", "verify_setup"} <= set(ls["node_state"])
+    edges = ls["skill_graph"]["edges"]
+    assert any(e["source"] == "verify_setup" and e["target"] == "a" for e in edges)
+    assert "a" in locked_node_ids(ls["skill_graph"], ls["node_state"])  # still locked: prereqs incomplete
+
+    # Complete the remedial chain -> the graded node must unlock (the dead end is gone).
+    for nid in ("setup_environment", "verify_setup"):
+        ls["node_state"][nid]["status"] = "mastered"
+        ls["node_state"][nid]["best_score"] = 100
+    assert "a" not in locked_node_ids(ls["skill_graph"], ls["node_state"])
 
 
 def test_cached_lesson_and_usage_survive_persist_reload(monkeypatch):
@@ -236,7 +274,7 @@ def test_grade_emits_exercise_graded_and_mastered(monkeypatch):
     monkeypatch.setattr(svc, "adapt_after_grade", lambda ls, nid: None)  # isolate event wiring
     ls = svc.new_learning_session(_scout_state(), "B")
     svc.open_lesson(ls, "a")
-    svc.grade(ls, "a", "sol")
+    svc.grade(ls, "a", "sol", exercise_revision=ls.get("lessons", {}).get("a", {}).get("exercise", {}).get("revision"))
     assert "exercise_graded" in _stages(ls)
     assert "node_mastered" in _stages(ls)
     graded = next(e for e in ls["events"] if e["stage"] == "exercise_graded")
@@ -255,7 +293,7 @@ def test_subforty_grade_emits_needs_review_and_regenerated(monkeypatch):
     )
     monkeypatch.setattr(svc, "_get_adaptation_agent", lambda: _FakeAgent(result=adaptation))
     ls = _opened(monkeypatch, 20)
-    svc.grade(ls, "a", "sol")
+    svc.grade(ls, "a", "sol", exercise_revision=ls.get("lessons", {}).get("a", {}).get("exercise", {}).get("revision"))
     assert "node_needs_review" in _stages(ls)
     assert "lesson_regenerated" in _stages(ls)
 
@@ -277,8 +315,8 @@ def test_path_completed_fires_once(monkeypatch):
     monkeypatch.setattr(svc, "adapt_after_grade", lambda ls, nid: None)
     ls = svc.new_learning_session(one_node, "B")
     svc.open_lesson(ls, "a")
-    svc.grade(ls, "a", "sol")
-    svc.grade(ls, "a", "sol again")
+    svc.grade(ls, "a", "sol", exercise_revision=ls.get("lessons", {}).get("a", {}).get("exercise", {}).get("revision"))
+    svc.grade(ls, "a", "sol again", exercise_revision=ls.get("lessons", {}).get("a", {}).get("exercise", {}).get("revision"))
     assert _stages(ls).count("path_completed") == 1
 
 

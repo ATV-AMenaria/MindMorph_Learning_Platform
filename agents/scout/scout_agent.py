@@ -10,7 +10,7 @@ sys.path.append(PROJECT_ROOT)
 logger = logging.getLogger(__name__)
 
 
-from config import llm
+from config import get_chat_model
 from prompts.prompt_registry_wrapper_method import setup_agent_prompt
 from prompts.scout_prompt_for_prompt import SCOUT_SYSTEM_PROMPT_FOR_PROMPT 
 from prompts.scout_prompt_for_queries import SCOUT_SYSTEM_PROMPT_FOR_QUERIES
@@ -23,7 +23,7 @@ class ScoutAgent:
     '''Scout agent that gathers preliminary information from orchestrator agent output. And routes the query to the evry sub-agent that it has. Before that it generates specialized queries for every sub-agent.'''
     
     def __init__(self, push_to_langsmith: bool = False, output_variant: Optional[str] = None):
-        self.llm = llm
+        self.llm = get_chat_model("complex")  # plans sub-agent queries once per session
         
         if output_variant is not None and output_variant not in ("Prompt", "Query"):
             raise ValueError("output_variant must be either 'Prompt' or 'Query'")
@@ -40,7 +40,7 @@ class ScoutAgent:
             tags=["scout", " specialized query generation", "agent"]
         )
 
-        self.structured_llm = self.llm.with_structured_output(ScoutOutputSchema)
+        self.structured_llm = self.llm.with_structured_output(ScoutOutputSchema, method="json_schema")
 
     
     def generate_specialized_queries(self, user_query:str):

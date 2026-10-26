@@ -6,6 +6,12 @@ passed its own exercise but still has an incomplete prerequisite renders as 'blo
 'mastered' (✅), and is excluded from the progress count. Extracted from ``app.py``; unit-tested via
 ``tests/test_completion_gating.py``.
 """
+import logging
+from functools import lru_cache
+
+from graph.skill_graph_adapt import prune_dangling_edges
+
+logger = logging.getLogger(__name__)
 
 # Picker ordering: foundational -> intermediate -> advanced. Phase 3 appends remedial nodes to the
 # end of the nodes list; sorting by level rank (stable within a level) realigns the picker with the
@@ -26,11 +32,37 @@ def ordered_node_ids(skill_graph: dict) -> list:
     ]
 
 
+@lru_cache(maxsize=256)
+def _warn_dangling(dropped: tuple) -> None:
+    """Warn once per distinct set of dangling edges (this runs several times per request).
+
+    # ponytail: once per shape per process, and no session/query context (unlike the build-time log
+    # in consensus_node) — the signature has no session handle. Thread a session id through if an
+    # operator ever needs to identify WHICH learner is on a rescued graph.
+    """
+    logger.warning(
+        "Skill graph loaded with %d edge(s) referencing unknown node ids: %s — ignored at read time "
+        "(stored session left as-is; see graph/skill_graph_adapt.prune_dangling_edges)",
+        len(dropped), list(dropped),
+    )
+
+
 def prereqs_by_node(skill_graph: dict) -> dict:
     """Map node_id -> set of its prerequisite ids. Edge convention (SkillEdge): source = prerequisite,
-    target = the skill that depends on it. So prereqs of X = sources of edges whose target is X."""
-    prereqs: dict = {n["id"]: set() for n in skill_graph.get("nodes", [])}
-    for e in skill_graph.get("edges", []) or []:
+    target = the skill that depends on it. So prereqs of X = sources of edges whose target is X.
+
+    Read-time enforcement of the same invariant ``prune_dangling_edges`` applies at BUILD time, reusing
+    that function so there is one implementation. Build-time pruning only protects graphs built after
+    it landed; a session persisted earlier with a phantom SOURCE (e.g. ``mlops_tools -> ...``) carries
+    an unmasterable prerequisite forever — its dependants stay locked and ``is_session_complete`` can
+    never fire. Ignoring those edges here makes such a session finishable without rewriting stored
+    state. Healthy graphs are unaffected (nothing is dropped), and a phantom TARGET was already
+    discarded by the ``tgt in prereqs`` guard, so this only ever removes an unsatisfiable gate."""
+    graph, dropped = prune_dangling_edges(skill_graph)
+    if dropped:
+        _warn_dangling(tuple(sorted((str(e.get("source")), str(e.get("target"))) for e in dropped)))
+    prereqs: dict = {n["id"]: set() for n in graph.get("nodes", [])}
+    for e in graph.get("edges", []) or []:
         src, tgt = e.get("source"), e.get("target")
         if tgt in prereqs and src is not None:
             prereqs[tgt].add(src)

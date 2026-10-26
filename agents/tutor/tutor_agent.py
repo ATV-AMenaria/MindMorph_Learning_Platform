@@ -1,6 +1,6 @@
 # AI Teaching Assistant (architecture §2, P3 #10): a streaming chat tutor grounded in the open lesson
-# and the learner's uploaded material. Streams via ChatGroq directly — the FallbackChatModel wrapper
-# only implements _generate, so it can't emit tokens incrementally (see the plan / IMPLEMENTATION_STATUS).
+# and the learner's uploaded material. Uses the shared `config.get_chat_model` chain (Groq pool ahead
+# of local Ollama) at a warmer temperature, streaming token-by-token via `.astream()`.
 
 import logging
 import os
@@ -18,6 +18,7 @@ from prompts.tutor_prompt import TUTOR_SYSTEM_PROMPT
 
 MAX_LESSON_CHARS = 4000  # cap the grounding context so the prompt stays bounded
 MAX_HISTORY_TURNS = 12
+TUTOR_TEMPERATURE = 0.3  # warmer than the 0.1 the structured-output agents use
 
 
 class TutorAgent:
@@ -28,10 +29,11 @@ class TutorAgent:
 
     def _get_model(self) -> Any:
         if self._model is None:
-            from langchain_groq import ChatGroq
-            from config import model_name
+            from config import get_chat_model
 
-            self._model = ChatGroq(model=model_name, temperature=0.3)
+            # Same provider chain as every other agent (Groq pool ahead of local Ollama), just warmer
+            # — this is conversation, not structured extraction. Built lazily so import stays cheap.
+            self._model = get_chat_model("default", temperature=TUTOR_TEMPERATURE)
         return self._model
 
     def build_messages(

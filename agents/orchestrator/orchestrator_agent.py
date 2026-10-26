@@ -25,7 +25,7 @@ class OrchestratorAgent:
         self.llm = llm
         self.agent_metadata = AgentMetadata()
         self.structured_llm = self.llm.with_structured_output(
-            Orchestrator_Output_Schema)
+            Orchestrator_Output_Schema, method="json_schema")
         
         self.chat_prompt = setup_agent_prompt(
             system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,

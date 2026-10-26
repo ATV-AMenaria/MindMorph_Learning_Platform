@@ -3,7 +3,8 @@
     python -m evals.run [--threshold 70]      # generate lessons → judge → scored report (exit 0/1)
     python -m evals.run --calibrate           # run fixed calibration cases through the REAL judge
 
-Requires GROQ_API_KEY (real LLM). Exit codes: 0 pass / 1 below threshold / 2 misconfigured.
+Needs a running local Ollama daemon (see config.py) — no API key required. Exit codes: 0 pass / 1 below
+threshold / 2 misconfigured.
 """
 import argparse
 import json
@@ -14,10 +15,6 @@ from pathlib import Path
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
-
-from dotenv import load_dotenv
-
-load_dotenv()  # make GROQ_API_KEY from .env visible before the key check below
 
 from evals.runner import run_evals
 
@@ -73,8 +70,14 @@ def main() -> int:
     parser.add_argument("--calibrate", action="store_true", help="validate the judge, don't generate")
     args = parser.parse_args()
 
-    if not os.getenv("GROQ_API_KEY"):
-        print("GROQ_API_KEY not set — this eval needs a live LLM.", file=sys.stderr)
+    try:
+        import httpx
+
+        from config import OLLAMA_HOST
+
+        httpx.get(OLLAMA_HOST, timeout=3)
+    except Exception as e:
+        print(f"Ollama not reachable at {OLLAMA_HOST!r} ({e}) — this eval needs a live LLM.", file=sys.stderr)
         return 2
 
     return _calibrate() if args.calibrate else _run(args.threshold)

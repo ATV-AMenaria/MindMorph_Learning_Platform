@@ -44,7 +44,7 @@ def setup_logging(level: str | None = None) -> None:
     root.addHandler(file_handler)
 
     # Tame chatty third-party loggers so app signal isn't drowned out.
-    for noisy in ("httpx", "httpcore", "urllib3", "openai", "groq"):
+    for noisy in ("httpx", "httpcore", "urllib3", "openai", "ollama"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     _configured = True

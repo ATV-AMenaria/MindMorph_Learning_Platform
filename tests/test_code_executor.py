@@ -78,6 +78,28 @@ def test_grade_submission_coding(fmt, artifact, solution, expect_key):
     assert result["passed"] == 1
 
 
+def test_strip_sandbox_paths_keeps_message_drops_path():
+    from tools.code_executor import _strip_sandbox_paths
+
+    raw = ("collect: ImportError: cannot import name 'prepare_and_fit' from 'solution' "
+           "(/private/var/folders/lg/abc123/T/mindmorph_grade_x9/solution.py)")
+    cleaned = _strip_sandbox_paths(raw)
+    assert "cannot import name 'prepare_and_fit' from 'solution'" in cleaned
+    assert "(solution.py)" in cleaned
+    assert "/private/var" not in cleaned
+
+
+def test_missing_name_failure_has_no_absolute_path():
+    # End-to-end: the solution lacks the name the tests import. The learner sees the cause, not
+    # the sandbox path.
+    result = execute_tests("def other():\n    pass\n",
+                           "from solution import prepare_and_fit\n\ndef test_x():\n    prepare_and_fit()\n")
+    blob = " ".join(result["failures"]) + result["stdout"]
+    assert "cannot import name 'prepare_and_fit'" in blob
+    assert "mindmorph_grade_" not in blob
+    assert result["score"] == 0.0
+
+
 def test_grade_submission_empty_returns_none():
     from agents.exercise.grader_agent import grade_submission
     assert grade_submission("coding_challenge", "   ", {"unit_tests": ["x"]}) is None

@@ -180,7 +180,7 @@ def test_assessment_agent_import_has_no_side_effects():
 
 
 def test_tutor_agent_imports_clean():
-    # Tutor imports without constructing the Groq model (lazy in _get_model).
+    # Tutor imports without constructing the Ollama model (lazy in _get_model).
     out = _import_output("agents.tutor.tutor_agent")
     assert "Traceback" not in out
 

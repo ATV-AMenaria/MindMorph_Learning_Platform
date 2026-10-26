@@ -38,8 +38,8 @@ class ConsensusAgent:
     '''Synthesizes specialist findings into a structured Skill Dependency Graph.'''
 
     def __init__(self, push_to_langsmith: bool = False):
-        self.llm = get_chat_model("complex")  # reasoning-heavy → Sonnet on fallback
-        self.structured_llm = self.llm.with_structured_output(SkillGraph)
+        self.llm = get_chat_model("complex")  # builds the skill graph once per session
+        self.structured_llm = self.llm.with_structured_output(SkillGraph, method="json_schema")
         system_template = SystemMessagePromptTemplate.from_template(CONSENSUS_SYSTEM_PROMPT)
         human_template = HumanMessagePromptTemplate.from_template(_HUMAN_TEMPLATE)
         self.chat_prompt = ChatPromptTemplate.from_messages([system_template, human_template])
@@ -50,6 +50,7 @@ class ConsensusAgent:
         academic: Optional[str],
         market: Optional[str],
         practical: Optional[str],
+        scope_instruction: str = "",
     ) -> Optional[SkillGraph]:
         '''Returns a SkillGraph reconciling the three perspectives, or None on failure.'''
         if not user_query or not isinstance(user_query, str):
@@ -62,6 +63,7 @@ class ConsensusAgent:
                 academic=academic or "Not available.",
                 market=market or "Not available.",
                 practical=practical or "Not available.",
+                scope_instruction=scope_instruction,
             )
             graph = self.structured_llm.invoke(messages)
             logger.info(

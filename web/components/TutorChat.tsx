@@ -31,6 +31,10 @@ export function TutorChat({
   const [streaming, setStreaming] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Announced to screen readers only (visible text is the streamed bubble itself, which updates too
+  // fast/often to announce token-by-token). One announcement when the reply starts, one when it's
+  // ready to read — never per-token, so it never spams.
+  const [announcement, setAnnouncement] = useState("");
 
   const send = async () => {
     const message = input.trim();
@@ -40,22 +44,40 @@ export function TutorChat({
     setPendingUser(message);
     setStreaming("");
     setBusy(true);
+    setAnnouncement("Tutor is responding…");
 
+    try {
     await api.streamChat(userId, sessionId, nodeId, message, {
       onToken: (t) => setStreaming((s) => s + t),
       onError: (m) => {
         setError(m);
+        setInput(message);
+        qc.invalidateQueries({ queryKey: sessionKey });
+        setAnnouncement("");
         setBusy(false);
         setPendingUser(null);
         setStreaming("");
       },
       onDone: () => {
+        // Announce that the reply is ready, not the reply text itself — the text is already readable
+        // as the streamed bubble above, and again in `bubbles` after the refetch below; duplicating it
+        // into the live region would mean a screen reader user hits it twice while browsing back.
+        setAnnouncement("Tutor replied.");
         setBusy(false);
         setPendingUser(null);
         setStreaming("");
         qc.invalidateQueries({ queryKey: sessionKey }); // persisted history is authoritative
       },
     });
+    } catch {
+      setError("The connection was interrupted. Your question is kept below; check saved history before retrying.");
+      setInput(message);
+      setBusy(false);
+      setPendingUser(null);
+      setStreaming("");
+      setAnnouncement("");
+      qc.invalidateQueries({ queryKey: sessionKey });
+    }
   };
 
   if (!open) {
@@ -80,6 +102,13 @@ export function TutorChat({
       role="dialog"
       aria-label="Teaching assistant"
     >
+      {/* Screen-reader-only: the streamed reply is readable as normal DOM content once it lands, but
+          nothing tells a screen reader user a reply is coming or done without this. Polite + atomic so
+          it never interrupts, and it only changes twice per turn (start, done) — never per token. */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {announcement}
+      </div>
+
       <header className="flex items-start justify-between gap-3 border-b border-white/10 pb-3">
         <div className="min-w-0">
           <h2 className="text-base font-semibold text-text-strong">Teaching assistant</h2>
@@ -109,7 +138,7 @@ export function TutorChat({
       </div>
 
       {error && (
-        <p className="mt-2 text-sm" style={{ color: "var(--color-review)" }}>
+        <p role="alert" className="mt-2 text-sm" style={{ color: "var(--color-review)" }}>
           ⚠️ {error}
         </p>
       )}

@@ -29,7 +29,18 @@ class JobScraperService:
         self.tools = []
 
     async def initialize(self):
-        """Initialize the MCP client connection."""
+        """Initialize the MCP client connection.
+
+        The handshake (connect + ``get_tools``) costs ~4.3s and was being re-paid on every
+        request, even though this service is a per-process singleton. The tool objects are
+        loop-agnostic — each ``ainvoke`` opens its own HTTP session — so they survive the
+        fresh event loop that ``learning_service._run_async`` creates per request. Any
+        failure below (and in the search/fetch callers) clears ``self.tools``, which makes
+        the next call re-handshake rather than reuse a wedged client.
+        """
+        if self.tools:
+            logger.debug("JobScraper MCP: reusing cached tools (%d)", len(self.tools))
+            return self.client
         try:
             logger.info("JobScraper MCP: connecting to server...")
             self.client = MultiServerMCPClient(
@@ -112,10 +123,16 @@ class JobScraperService:
             logger.warning("JobScraper: search timed out for %r; client reset", query)
             return None
         except StopIteration:
-            logger.warning("JobScraper: %r tool is not available", self.SEARCH_TOOL_NAME)
+            # A partial cached tool list would otherwise wedge every later request.
+            self.client = None
+            self.tools = []
+            logger.warning("JobScraper: %r tool is not available; client reset", self.SEARCH_TOOL_NAME)
             return None
         except Exception:
-            logger.exception("JobScraper: error searching jobs")
+            # Tools are cached across requests now, so a wedged client must not persist.
+            self.client = None
+            self.tools = []
+            logger.exception("JobScraper: error searching jobs; client reset")
             return None
 
     @staticmethod
@@ -163,10 +180,14 @@ class JobScraperService:
             logger.warning("JobScraper: fetch timed out for dataset %s; client reset", dataset_id)
             return []
         except StopIteration:
-            logger.warning("JobScraper: %r tool is not available", self.OUTPUT_TOOL_NAME)
+            self.client = None
+            self.tools = []
+            logger.warning("JobScraper: %r tool is not available; client reset", self.OUTPUT_TOOL_NAME)
             return []
         except Exception:
-            logger.exception("JobScraper: error retrieving job results")
+            self.client = None
+            self.tools = []
+            logger.exception("JobScraper: error retrieving job results; client reset")
             return []
 
     def _parse_job_data(self, text_data: str) -> List[Dict]:
