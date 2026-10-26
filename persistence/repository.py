@@ -62,6 +62,15 @@ def _storage_errors(method):
     return wrapped
 
 
+def _sync_progress_to_neo4j(session_id: str, ls: dict) -> None:
+    """Best-effort mirror of node progress into Neo4j; the session row is already saved, so never raise."""
+    try:
+        from persistence.neo4j_graph import write_session_progress
+        write_session_progress(session_id, ls.get("node_state", {}))
+    except Exception:
+        logger.warning("neo4j progress sync failed for session %s (non-fatal)", session_id, exc_info=True)
+
+
 class PostgresLearningSessionRepository(LearningSessionRepository):
     """Durable storage only. Updates compare the version read by the caller."""
 
@@ -98,12 +107,7 @@ class PostgresLearningSessionRepository(LearningSessionRepository):
             ls.revision = revision
         logger.info("persistence: saved session %s/%s", user_id, session_id)
 
-        # Phase 3.4: Sync progress to Neo4j
-        try:
-            from persistence.neo4j_graph import write_session_progress
-            write_session_progress(session_id, ls.get("node_state", {}))
-        except Exception:
-            pass
+        _sync_progress_to_neo4j(session_id, ls)
 
     @_storage_errors
     def list_sessions(self, user_id):
@@ -174,12 +178,7 @@ class InMemoryLearningSessionRepository(LearningSessionRepository):
             if isinstance(ls, SessionSnapshot):
                 ls.revision = revision
 
-        # Phase 3.4: Sync progress to Neo4j
-        try:
-            from persistence.neo4j_graph import write_session_progress
-            write_session_progress(session_id, ls.get("node_state", {}))
-        except Exception:
-            pass
+        _sync_progress_to_neo4j(session_id, ls)
 
     def list_sessions(self, user_id: str) -> list[dict]:
         with self._lock:

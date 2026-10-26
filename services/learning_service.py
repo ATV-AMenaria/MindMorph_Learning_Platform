@@ -49,6 +49,15 @@ def _normalize_query(q: str) -> str:
     """Produce a canonical topic key from a user query for cache matching."""
     return re.sub(r"\s+", " ", q.lower().strip())
 
+def _cache_topic(query: str, profile: Optional[dict]) -> str:
+    """Cache key for a skill graph: the normalized query plus a fingerprint of the learner profile,
+    because domain/language/scope/goal/preferences all change the graph that gets planned. A learner
+    with no declared profile keeps the bare query key."""
+    topic = _normalize_query(query)
+    if not profile:
+        return topic
+    return f"{topic}#{hashlib.sha256(json.dumps(profile, sort_keys=True).encode()).hexdigest()[:12]}"
+
 def _get_graph_from_cache(canonical: str) -> Optional[dict]:
     """Look up an existing skill graph from Neo4j (Phase 3) or Postgres graph_cache (Phase 1).
     Falls through to None on any failure — pipeline runs as normal fallback."""
@@ -342,7 +351,7 @@ def start_session(user_query: str, format_type: str = "B",
     domain = profile.get("domain")
     primary_language, scope = profile.get("primary_language"), profile.get("scope")
     logger.info("service: start_session (query=%r, format=%s)", user_query, format_type)
-    canonical = _normalize_query(user_query)
+    canonical = _cache_topic(user_query, profile)
 
     # ── Cache check: return immediately if graph already built ────────────────
     cached_graph = _get_graph_from_cache(canonical)
@@ -399,7 +408,7 @@ async def astream_session(user_query: str, format_type: str = "B",
     domain = profile.get("domain")
     primary_language, scope = profile.get("primary_language"), profile.get("scope")
     logger.info("service: astream_session (query=%r, format=%s)", user_query, format_type)
-    canonical = _normalize_query(user_query)
+    canonical = _cache_topic(user_query, profile)
 
     # ── Cache check: return immediately if graph already built ────────────────
     cached_graph = _get_graph_from_cache(canonical)
@@ -589,10 +598,6 @@ def adapt_after_grade(ls: dict, node_id: str) -> list[str]:
     ls["skill_graph"] = new_graph
     for nid in new_ids:
         ls["node_state"].setdefault(nid, default_node_state())
-        
-    if new_ids or adaptation.new_edges:
-        canonical = ls.get("canonical") or _normalize_query(ls.get("summary") or "")
-        _save_graph_to_cache(canonical, ls.get("summary") or "", new_graph)
 
     focus = list(adaptation.remediation_focus or [])
     if focus:
