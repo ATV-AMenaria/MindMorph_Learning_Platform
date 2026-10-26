@@ -8,10 +8,14 @@ aggregates on read. Persists for free in the JSONB session blob (same path as `u
 
 Mirrors the cost pattern (`services/cost.py`): record raw at one chokepoint per stage, aggregate on read.
 """
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
 from services.mastery import REVIEW_THRESHOLD
+from services.telemetry import emit_telemetry
+
+logger = logging.getLogger(__name__)
 
 
 class STAGES:
@@ -31,10 +35,13 @@ class STAGES:
 
 
 def record_event(ls: dict, stage: str, **fields: Any) -> None:
-    """Append one event to the session timeline. Pure (no I/O); the caller persists ls afterwards."""
-    ls.setdefault("events", []).append(
-        {"ts": datetime.now(timezone.utc).isoformat(), "stage": stage, **fields}
-    )
+    """Append one event to the session timeline and stream to telemetry/Kafka."""
+    event = {"ts": datetime.now(timezone.utc).isoformat(), "stage": stage, **fields}
+    ls.setdefault("events", []).append(event)
+    try:
+        emit_telemetry(event)
+    except Exception as e:
+        logger.debug("Telemetry emission skipped or failed (non-fatal): %s", e)
 
 
 def has_event(ls: dict, stage: str) -> bool:

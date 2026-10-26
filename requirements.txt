@@ -26,3 +26,7 @@ python-multipart
 pgvector
 pytest
 pytest-asyncio
+
+# Graph Database
+neo4j>=5.0
+langchain-neo4j

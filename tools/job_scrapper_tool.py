@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 class JobScraperService:
     def __init__(self):
         self.client = None
-        self.token = os.getenv("APIFY_API_KEY")
+        self.token = os.getenv("APIFY_API_TOKEN") or os.getenv("APIFY_API_KEY")
         self.tools = []
 
     async def initialize(self):
