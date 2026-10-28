@@ -19,6 +19,7 @@ from langchain_core.prompts import (
 from config import get_chat_model
 from prompts.consensus_prompt import CONSENSUS_SYSTEM_PROMPT
 from agents.consensus.skill_graph_schema import SkillGraph
+from rag.grounding import evidence_prompt
 
 _HUMAN_TEMPLATE = """Learning goal: {user_query}
 
@@ -30,6 +31,9 @@ MARKET perspective:
 
 PRACTICAL perspective:
 {practical}
+
+KNOWLEDGE EVIDENCE:
+{knowledge}
 
 Reconcile these into a Skill Dependency Graph."""
 
@@ -51,6 +55,7 @@ class ConsensusAgent:
         market: Optional[str],
         practical: Optional[str],
         scope_instruction: str = "",
+        knowledge_evidence: Optional[dict] = None,
     ) -> Optional[SkillGraph]:
         '''Returns a SkillGraph reconciling the three perspectives, or None on failure.'''
         if not user_query or not isinstance(user_query, str):
@@ -63,6 +68,7 @@ class ConsensusAgent:
                 academic=academic or "Not available.",
                 market=market or "Not available.",
                 practical=practical or "Not available.",
+                knowledge=evidence_prompt(knowledge_evidence),
                 scope_instruction=scope_instruction,
             )
             graph = self.structured_llm.invoke(messages)

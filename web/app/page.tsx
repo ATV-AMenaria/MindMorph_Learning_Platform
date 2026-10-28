@@ -8,6 +8,7 @@ import { useUser } from "@/lib/useUser";
 import { KnowledgeUpload } from "@/components/KnowledgeUpload";
 import { FollowUpModal } from "@/components/FollowUpModal";
 import { PathSummaryModal } from "@/components/PathSummaryModal";
+import { EvidenceSources, citedText } from "@/components/EvidenceSources";
 import type { FollowUpQuestion, LearningSession, StartSessionResponse } from "@/lib/types";
 
 export default function HomePage() {
@@ -224,7 +225,7 @@ function Dashboard({ userId, onSignOut }: { userId: string; onSignOut: () => voi
             <p className="text-sm text-text-muted">{createNotice}</p>
           </div>
         )}
-        {directResponse && <section className="mt-4 whitespace-pre-wrap" aria-label="Direct answer">{directResponse.final_content || directResponse.exercise?.statement || "No answer was generated. Please try again."}</section>}
+        {directResponse && <section className="mt-4 whitespace-pre-wrap" aria-label="Direct answer">{citedText(directResponse.final_content || directResponse.exercise?.statement || "No answer was generated. Please try again.", directResponse.grounding)}<EvidenceSources evidence={directResponse.grounding} /></section>}
         {creating && (
           <p className="mt-3 flex items-center gap-2 text-sm text-text-muted">
             <span

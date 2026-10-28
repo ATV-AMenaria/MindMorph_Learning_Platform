@@ -9,6 +9,7 @@ import { CodeEditor } from "./CodeEditor";
 import { GradeResult } from "./GradeResult";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { Sandbox } from "./Sandbox";
+import { EvidenceSources, citedText } from "./EvidenceSources";
 import type { LearningSession } from "@/lib/types";
 
 // rehype-highlight runs before these component overrides and only colorizes languages it
@@ -71,12 +72,14 @@ export function LessonPanel({
             rehypePlugins={rehypeHighlightPlugins}
             components={markdownComponents}
           >
-            {lesson.content}
+            {citedText(lesson.content, lesson.grounding)}
           </ReactMarkdown>
         ) : (
           <p className="text-text-muted">Lesson content could not be generated.</p>
         )}
       </div>
+
+      <EvidenceSources evidence={lesson.grounding} />
 
       {/* Explicit content-quality signal (Gate-1): the direct "was this lesson wrong?" measure. */}
       {onFlag && (
@@ -109,8 +112,9 @@ export function LessonPanel({
           </div>
 
           <div className="prose prose-invert lesson-prose max-w-none">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{exercise.statement}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{citedText(exercise.statement, exercise.grounding ?? lesson.grounding)}</ReactMarkdown>
           </div>
+          <EvidenceSources evidence={exercise.grounding ?? lesson.grounding} />
 
           <div className="mt-6">
             {isCoding ? (

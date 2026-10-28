@@ -11,6 +11,7 @@ import { LessonSkeleton } from "@/components/LessonSkeleton";
 import { PracticeHistory } from "@/components/PracticeHistory";
 import { SkillGraph } from "@/components/SkillGraph";
 import { TutorChat } from "@/components/TutorChat";
+import { EvidenceSources } from "@/components/EvidenceSources";
 import { LockedError, api } from "@/lib/api";
 import { completeNodeIds, incompletePrereqLabels } from "@/lib/status";
 import type { GradeResult as GradeResultT, SessionResponse } from "@/lib/types";
@@ -157,6 +158,7 @@ export default function SessionPage() {
           only when the verdict is explicitly false; null/absent means "no verdict", not "failed". */}
       {session.assessment?.submitted && session.assessment.results && <button className="accent-ring mt-4 rounded-lg border px-4 py-2" onClick={() => setShowResults(true)}>Review assessment</button>}
       {session.review_passed === false && <ReviewCaveat notes={session.review_notes} />}
+      <EvidenceSources evidence={session.grounding} />
 
       {pendingAssessment && session.assessment ? (
         <section className="mt-8">

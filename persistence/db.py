@@ -29,7 +29,7 @@ def get_engine() -> Engine:
 
         logger.info("persistence: creating engine for %s", DATABASE_URL.rsplit("@", 1)[-1])
         _engine = create_engine(
-            DATABASE_URL, pool_pre_ping=True, future=True, pool_timeout=5,
+            DATABASE_URL, pool_pre_ping=True, future=True, pool_timeout=5, hide_parameters=True,
             connect_args={"connect_timeout": 3, "options": "-c statement_timeout=5000 -c lock_timeout=3000"},
         )
     return _engine
@@ -63,4 +63,4 @@ def check_ready() -> None:
         if current != [head]:
             raise RuntimeError("Database migrations are pending")
         connection.execute(text("SELECT revision FROM learning_sessions LIMIT 0"))
-        connection.execute(text("SELECT embedding FROM rag_chunks LIMIT 0"))
+        connection.execute(text("SELECT embedding, source_id, page FROM rag_chunks LIMIT 0"))
