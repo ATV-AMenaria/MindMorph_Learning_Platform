@@ -190,11 +190,10 @@ async def test_missing_token_in_situ_names_the_env_var(monkeypatch, caplog):
 
 
 @pytest.mark.asyncio
-async def test_exercise_graph_grounding_failure_is_also_logged(monkeypatch, caplog):
-    """The commit's stated reason for fixing at the client layer: exercise_graph.py is a second
-    caller that emitted no grounding telemetry. It defaults to the same _fetch_github_repos, so its
-    failures must now be visible too."""
+async def test_exercise_graph_grounding_failure_is_reported_without_blocking_generation(monkeypatch, caplog):
+    """A failed shared evidence source stays visible without blocking valid practice generation."""
     monkeypatch.setenv("GITHUB_PERSONAL_TOKEN", "")
+    monkeypatch.setattr("rag.registry.get_user_store", MagicMock(side_effect=RuntimeError("unavailable")))
     from graph.exercise_graph import build_exercise_graph
 
     format_selector = MagicMock()
@@ -211,9 +210,10 @@ async def test_exercise_graph_grounding_failure_is_also_logged(monkeypatch, capl
 
     g = build_exercise_graph(format_selector=format_selector, synthesizer=synthesizer, grader=grader)
     with caplog.at_level(logging.WARNING):
-        state = await g.ainvoke({"user_query": "practice rust"})
+        state = await g.ainvoke({"user_query": "practice rust", "user_id": "exercise-user"})
 
-    assert any("GITHUB_PERSONAL_TOKEN is not set" in r.getMessage() for r in caplog.records), caplog.text
+    assert state["grounding"]["status"] == "unavailable"
+    assert "personal_unavailable" in state["grounding"]["warnings"]
     assert state["exercise_statement"] == "EXERCISE_STATEMENT"
 
 

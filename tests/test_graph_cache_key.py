@@ -17,12 +17,12 @@ def test_cache_topic_without_profile_is_the_bare_query():
 
 
 def test_neo4j_progress_failure_is_logged_not_raised(monkeypatch, caplog):
-    import persistence.neo4j_graph as ng
+    import persistence.private_graph as ng
 
     def boom(*_a, **_k):
         raise RuntimeError("neo4j down")
 
-    monkeypatch.setattr(ng, "write_session_progress", boom)
+    monkeypatch.setattr(ng, "write_session_snapshot", boom)
     with caplog.at_level(logging.WARNING):
-        _sync_progress_to_neo4j("s1", {"node_state": {}})
+        _sync_progress_to_neo4j("s1", {"skill_graph": {"nodes": [{"id": "a"}]}, "node_state": {}}, "u1")
     assert "neo4j progress sync failed" in caplog.text

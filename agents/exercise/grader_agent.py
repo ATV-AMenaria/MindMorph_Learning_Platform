@@ -51,6 +51,8 @@ class GraderAgent:
         exercise_format: str,
         exercise_statement: str,
         exercise_language: Optional[str] = None,
+        *,
+        callbacks: Optional[list] = None,
     ) -> Optional[GradingArtifact]:
         """Returns a GradingArtifact, or None on failure."""
         if not exercise_statement or not isinstance(exercise_statement, str):
@@ -75,7 +77,8 @@ class GraderAgent:
         # produces a confident wrong score. Validate before handing it to the learner.
         for attempt in (1, 2):
             try:
-                artifact = self.structured_llm.invoke(messages)
+                invoke_kwargs = {"config": {"callbacks": callbacks}} if callbacks is not None else {}
+                artifact = self.structured_llm.invoke(messages, **invoke_kwargs)
             except Exception:
                 logger.exception("Grader: error building grading artifact")
                 return None

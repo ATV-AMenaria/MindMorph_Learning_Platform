@@ -48,6 +48,7 @@ export interface GradingArtifact {
 }
 
 export interface Exercise {
+  grounding?: GroundingInfo | null;
   revision?: string;
   format?: "coding_challenge" | "case_study" | null;
   language?: "python" | "javascript" | "sql" | null;
@@ -56,6 +57,7 @@ export interface Exercise {
 }
 
 export interface Lesson {
+  grounding?: GroundingInfo | null;
   content?: string | null;
   exercise?: Exercise;
 }
@@ -104,6 +106,7 @@ export interface Assessment {
 }
 
 export interface ChatMessage {
+  grounding?: GroundingInfo | null;
   role: "user" | "assistant";
   content: string;
 }
@@ -117,6 +120,7 @@ export interface LearningEvent {
 }
 
 export interface LearningSession {
+  grounding?: GroundingInfo | null;
   skill_graph: SkillGraph;
   summary?: string | null;
   review_passed?: boolean | null;
@@ -141,6 +145,7 @@ export interface SessionMeta {
 }
 
 export interface StartSessionResponse {
+  grounding?: GroundingInfo | null;
   route: string;
   session_id?: string | null;
   learning_session?: LearningSession | null;
@@ -177,4 +182,24 @@ export interface FollowUpResponse {
 export interface IngestResponse {
   filename: string;
   chunks: number;
+}
+
+export interface GroundingPassage {
+  id: string;
+  text: string;
+  source: string;
+  kind: "personal" | "shared" | "web_snippet" | "web_page";
+  source_id?: string | null;
+  page?: number | null;
+  url?: string | null;
+  score: number;
+}
+
+export interface GroundingInfo {
+  status: "grounded" | "insufficient" | "disabled" | "unavailable";
+  passages: GroundingPassage[];
+  sources: Record<string, string>;
+  warnings: string[];
+  elapsed_ms: number;
+  candidate_count: number;
 }

@@ -14,6 +14,7 @@ from threading import RLock
 from functools import wraps
 
 from persistence.errors import SessionSnapshot, SessionConflictError, StorageUnavailableError
+from services.generation_privacy import private_context
 
 logger = logging.getLogger(__name__)
 
@@ -55,20 +56,24 @@ def _storage_errors(method):
     def wrapped(*args, **kwargs):
         from sqlalchemy.exc import SQLAlchemyError
         try:
-            return method(*args, **kwargs)
+            with private_context():
+                return method(*args, **kwargs)
         except SQLAlchemyError as exc:
-            logger.exception("Database operation failed: %s", method.__name__)
+            logger.error("Database operation failed: %s (%s)", method.__name__, type(exc).__name__)
             raise StorageUnavailableError("Progress could not be saved or loaded. Please try again.") from exc
     return wrapped
 
 
-def _sync_progress_to_neo4j(session_id: str, ls: dict) -> None:
+def _sync_progress_to_neo4j(session_id: str, ls: dict, user_id: str | None = None, revision: int = 1) -> None:
     """Best-effort mirror of node progress into Neo4j; the session row is already saved, so never raise."""
     try:
-        from persistence.neo4j_graph import write_session_progress
-        write_session_progress(session_id, ls.get("node_state", {}))
+        if not user_id or not ls.get("skill_graph", {}).get("nodes"):
+            return
+        from persistence.private_graph import write_session_snapshot
+        with private_context():
+            write_session_snapshot(user_id, session_id, ls["skill_graph"], ls.get("node_state", {}), revision)
     except Exception:
-        logger.warning("neo4j progress sync failed for session %s (non-fatal)", session_id, exc_info=True)
+        logger.warning("neo4j progress sync failed (non-fatal)")
 
 
 class PostgresLearningSessionRepository(LearningSessionRepository):
@@ -105,9 +110,9 @@ class PostgresLearningSessionRepository(LearningSessionRepository):
             session.commit()
         if isinstance(ls, SessionSnapshot):
             ls.revision = revision
-        logger.info("persistence: saved session %s/%s", user_id, session_id)
+        logger.info("persistence: saved session revision %d", revision)
 
-        _sync_progress_to_neo4j(session_id, ls)
+        _sync_progress_to_neo4j(session_id, ls, user_id, revision)
 
     @_storage_errors
     def list_sessions(self, user_id):
@@ -178,7 +183,7 @@ class InMemoryLearningSessionRepository(LearningSessionRepository):
             if isinstance(ls, SessionSnapshot):
                 ls.revision = revision
 
-        _sync_progress_to_neo4j(session_id, ls)
+        _sync_progress_to_neo4j(session_id, ls, user_id, revision)
 
     def list_sessions(self, user_id: str) -> list[dict]:
         with self._lock:

@@ -204,7 +204,7 @@ def test_chat_finishing_after_a_grade_reports_conflict_and_preserves_grade(monke
     repo = InMemoryLearningSessionRepository()
     repo.save("u", "s", {**session(), "chat": []})
     monkeypatch.setattr(routes, "get_default_repository", lambda: repo)
-    monkeypatch.setattr(routes, "build_tutor_messages", lambda *a: [])
+    monkeypatch.setattr(routes, "build_tutor_messages", lambda *a, **kwargs: [])
     class Tutor:
         async def astream(self, _messages):
             newer = repo.get("u", "s")

@@ -8,6 +8,7 @@ import type {
   SessionResponse,
   StartSessionResponse,
   FollowUpResponse,
+  GroundingInfo,
 } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -119,7 +120,7 @@ export const api = {
     sessionId: string,
     nodeId: string | null,
     message: string,
-    cb: { onToken: (t: string) => void; onDone: () => void; onError: (m: string) => void },
+    cb: { onToken: (t: string) => void; onDone: () => void; onError: (m: string) => void; onEvidence?: (e: GroundingInfo) => void },
   ): Promise<void> {
     const res = await fetch(
       `${BASE}/sessions/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}/chat`,
@@ -134,7 +135,8 @@ export const api = {
       return;
     }
     let finished = false;
-    await readSseFrames(res, (evt: { token?: string; done?: boolean; error?: string }) => {
+    await readSseFrames(res, (evt: { token?: string; done?: boolean; error?: string; grounding?: GroundingInfo }) => {
+      if (evt.grounding) cb.onEvidence?.(evt.grounding);
       if (evt.error) {
         finished = true;
         cb.onError(evt.error);

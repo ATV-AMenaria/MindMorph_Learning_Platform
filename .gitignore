@@ -8,6 +8,9 @@ __pycache__/
 logs/
 *.log
 
+# Isolated Next.js verification builds
+web/.next-*/
+
 # Source design PDFs (kept local, not committed)
 *.pdf
 

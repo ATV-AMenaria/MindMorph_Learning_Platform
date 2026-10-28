@@ -5,6 +5,7 @@ that mutates the dict → save the whole dict back → return it. The repository
 (``get_default_repository``), so the store (Postgres / in-memory) is swappable via config.
 """
 import json
+import asyncio
 import logging
 import os
 import secrets
@@ -29,6 +30,8 @@ from api.schemas import (
 from persistence.repository import get_default_repository
 from persistence.errors import StorageUnavailableError, SessionConflictError
 from services.events import STAGES, funnel_summary, record_event
+from services.generation_privacy import private_generation
+from rag.grounding import retrieve_evidence, validate_citations, CitationStream
 from services.learning_service import (
     LockedNodeError,
     StaleExerciseError,
@@ -39,6 +42,7 @@ from services.learning_service import (
     grade_assessment,
     open_lesson,
     start_session,
+    tutor_retrieval_query,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,7 +56,7 @@ GEN_FAILED = "The learning service is busy or rate-limited. Please try again in 
 
 
 def _service_unavailable(what: str, exc: Exception) -> HTTPException:
-    logger.exception("api: %s failed", what)
+    logger.error("api: %s failed (%s)", what, type(exc).__name__)
     return HTTPException(status_code=503, detail=GEN_FAILED)
 
 
@@ -78,7 +82,7 @@ def get_followup_questions(req: FollowUpRequest) -> FollowUpResponse:
 @router.post("/sessions", response_model=StartSessionResponse)
 def create_session(req: CreateSessionRequest) -> StartSessionResponse:
     """Run orchestration for a query. Only the SCOUT route yields a persisted learning_session."""
-    extra = {}
+    extra = {"user_id": req.user_id}
     if req.preferences is not None:
         extra["preferences"] = req.preferences
     if req.primary_language is not None:
@@ -96,10 +100,11 @@ def create_session(req: CreateSessionRequest) -> StartSessionResponse:
         route=result["route"],
         final_content=result.get("final_content"),
         exercise=result.get("exercise"),
+        grounding=result.get("grounding"),
     )
     ls = result.get("learning_session")
     if ls is not None:
-        session_id = uuid.uuid4().hex
+        session_id = ls.get("graph_identity") or uuid.uuid4().hex
         ls["session_id"] = session_id
         get_default_repository().save(req.user_id, session_id, ls, title=req.query)
         resp.session_id = session_id
@@ -112,7 +117,7 @@ async def create_session_stream(req: CreateSessionRequest) -> StreamingResponse:
     """Streaming twin of ``POST /sessions``: SSE progress (one frame per LangGraph node) instead of
     one ~60s blocking wait. Terminal frame carries the same payload shape the sync route returns."""
 
-    extra = {}
+    extra = {"user_id": req.user_id}
     if req.preferences is not None:
         extra["preferences"] = req.preferences
     if req.primary_language is not None:
@@ -133,10 +138,11 @@ async def create_session_stream(req: CreateSessionRequest) -> StreamingResponse:
                     route=result["route"],
                     final_content=result.get("final_content"),
                     exercise=result.get("exercise"),
+                    grounding=result.get("grounding"),
                 )
                 ls = result.get("learning_session")
                 if ls is not None:
-                    session_id = uuid.uuid4().hex
+                    session_id = ls.get("graph_identity") or uuid.uuid4().hex
                     ls["session_id"] = session_id
                     get_default_repository().save(req.user_id, session_id, ls, title=req.query)
                     resp.session_id = session_id
@@ -145,7 +151,7 @@ async def create_session_stream(req: CreateSessionRequest) -> StreamingResponse:
         except (StorageUnavailableError, SessionConflictError) as exc:
             yield _sse({"error": str(exc)})
         except Exception:
-            logger.exception("api: create_session_stream failed")
+            logger.error("api: create_session_stream failed")
             yield _sse({"error": GEN_FAILED})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
@@ -197,7 +203,7 @@ async def ingest_material(user_id: str, file: UploadFile = File(...)) -> IngestR
     from rag import registry
 
     try:
-        chunks = registry.ingest_pdf(user_id, data, name)
+        chunks = await asyncio.to_thread(registry.ingest_pdf, user_id, data, name)
     except ValueError as e:
         # Unreadable / image-only PDF — client error, not a server fault.
         raise HTTPException(status_code=400, detail=str(e))
@@ -237,25 +243,39 @@ async def chat(user_id: str, session_id: str, req: ChatRequest) -> StreamingResp
     ls["chat"].append({"role": "user", "content": req.message})
     repo.save(user_id, session_id, ls)  # persist the question before streaming (survives a dropped stream)
 
-    messages = build_tutor_messages(ls, req.node_id, req.message, user_id)
+    # The public search query is the original declared goal, never private lesson text
+    # or a learner question that may quote a private passage.
+    evidence = await asyncio.to_thread(retrieve_evidence, tutor_retrieval_query(ls, req.node_id, req.message), user_id,
+                                        public_query=ls.get("public_query"))
+    messages = await asyncio.to_thread(build_tutor_messages, ls, req.node_id, req.message, user_id,
+                                       evidence=evidence)
     from services.learning_service import _get_tutor_agent
 
+    @private_generation
     async def gen():
         full = ""
+        citations = CitationStream(evidence)
         try:
             async for token in _get_tutor_agent().astream(messages):
                 full += token
-                yield _sse({"token": token})
+                ready = citations.push(token)
+                if ready:
+                    yield _sse({"token": ready})
+            tail = citations.push("", final=True)
+            if tail:
+                yield _sse({"token": tail})
         except Exception:
-            logger.exception("api: chat stream failed")
+            logger.error("api: chat stream failed")
             yield _sse({"error": GEN_FAILED})
             return
-        ls["chat"].append({"role": "assistant", "content": full})
+        full, final_evidence = validate_citations(full, evidence)
+        ls["chat"].append({"role": "assistant", "content": full, "grounding": final_evidence})
         try:
             repo.save(user_id, session_id, ls)
         except (StorageUnavailableError, SessionConflictError) as exc:
             yield _sse({"error": str(exc)})
             return
+        yield _sse({"grounding": final_evidence})
         yield _sse({"done": True})
 
     return StreamingResponse(gen(), media_type="text/event-stream")

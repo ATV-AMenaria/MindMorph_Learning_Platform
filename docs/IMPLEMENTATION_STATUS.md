@@ -165,15 +165,22 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
    through two fresh API processes, pgvector user isolation, actual database outage and recovery.
    Conflict handling deliberately rejects stale changes; it does not silently merge or repeat grading.
    *Deferred:* Redis and public identity/ownership (P3 #13). *Satisfies:* architecture 5.2, 5.4.
-7. 🟡 **Provider chain (Groq pool → Ollama) + RAG** — _RAG (grounding):_ `rag/` package adds a **local, no-API-key** retrieval
-   arm. `rag/embeddings.py` wraps **FastEmbed** (ONNX `BAAI/bge-small-en-v1.5`, no torch) as a LangChain
-   `Embeddings`; `rag/store.py` `RagStore` over `langchain_core` `InMemoryVectorStore` (chunk + `Source:`
-   output mirrors `gather_facts`). `build_content_graph(..., retriever=)` merges KB chunks **+** web search
-   into `factual_findings` (single-source stays verbatim; both labelled) — RAG **augments**, never replaces
-   web. Corpus = `knowledge_base/*.md|.txt` (P2 #9 uploads feed the same store later). **Opt-in**
-   (`MINDMORPH_RAG=1`, `MINDMORPH_KNOWLEDGE_DIR`) so dev/tests never download the model; verified live
-   (real FastEmbed indexed the seed corpus and retrieved on a semantic query). Remaining ⛔: pgvector at
-   scale, RAG in the exercise blog/dataset path, re-ranking. _Provider chain:_
+7. 🟡 **Provider chain (Groq pool → Ollama) + grounded learning** — _P1 #7 grounding implementation:_ a fourth
+   Knowledge Grounding Agent retrieves personal/shared/public evidence without another rewriting
+   LLM call. Consensus explicitly joins all four branches and Reviewer sees the evidence/profile.
+   The common helper supplies scored/deduplicated passages, local MiniLM reranking, hard budgets,
+   bounded public-page fetching, validated source references and explicit evidence status. New
+   lessons/practice share one frozen bundle; tutor retrieval includes the selected skill and saves
+   source metadata. Personal uploads and opt-in shared material are searched independently; unrelated
+   uploads are excluded and saved paths/lessons remain intact. New text-PDF passages retain real
+   pages/source identity; legacy provenance stays unknown. Grounded paths bypass shared roadmap
+   caches/checkpoints. Session state enforces prerequisites; atomic Neo4j mirrors isolate each
+   caller/session and reject stale revisions. Migration heads merge before nullable provenance fields.
+   Verification includes disposable migration/preservation/restart/outage/isolation checks and
+   100,000 passages with ten simultaneous exact tenant-filtered searches; that capacity fixture uses
+   deterministic vectors with web/ranking disabled, separately from real local-model quality samples.
+   See [GROUNDING.md](GROUNDING.md) for current contracts and verification commands. ANN indexing,
+   OCR, library selection/removal and additional formats remain deferred. _Provider chain:_
    `llm_providers.py` + `config.get_chat_model(tier, provider, fallback)`: two vendor choices
    (`groq` | `ollama`). **Primary** = `provider` arg or `MINDMORPH_LLM_PROVIDER` env (defaults to
    `groq` when `GROQ_API_KEYS` holds keys, `ollama` otherwise); **fallback** = `fallback` arg or
