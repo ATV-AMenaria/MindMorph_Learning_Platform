@@ -27,6 +27,14 @@ For a coding_challenge with language = 'python':
   - Tests run in a lightweight runner, not pytest. Test functions must take no required arguments.
     Do not use pytest fixtures, parametrization decorators, or generator/yield test functions.
   - Do NOT include the reference implementation — only the tests.
+  - Test the written requirements, not incidental details of example output. If a worked table
+    contradicts an explicit sorting rule, apply that rule to the expected table before comparing.
+  - If numeric outputs may be either integers or floats, do not require exact pandas dtypes.
+    Use `pandas.testing.assert_frame_equal(..., check_dtype=False, check_index_type=False)` for
+    value/schema comparisons and check numeric column types separately when required. For empty
+    outputs, check the required columns and index name without imposing an unspecified index dtype.
+  - Respect the specified statistic: NumPy variance uses `ddof=0` (population variance), while
+    pandas' default variance uses `ddof=1`. Never substitute one for the other.
 - Leave `rubric` and `sql_assertions` empty.
 
 ═══════════════════════════════════════════════════════════════════════

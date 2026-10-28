@@ -29,6 +29,7 @@ from agents.exercise.grader_agent import GraderAgent
 from agents.factual.factual_agent import FactualAgent
 from tools.grading_contract import normalize_language
 from services.learner_profile import with_profile, is_technical
+from rag.grounding import retrieve_evidence, validate_citations
 
 
 class ExerciseState(TypedDict, total=False):
@@ -43,6 +44,10 @@ class ExerciseState(TypedDict, total=False):
     grading_artifact: Optional[dict]
     learner_profile: Optional[dict]
     primary_language: Optional[str]
+    user_id: Optional[str]
+    public_query: Optional[str]
+    grounding: Optional[dict]
+    lesson_content: Optional[str]
 
 
 def build_exercise_graph(
@@ -52,12 +57,15 @@ def build_exercise_graph(
     github: Optional[Any] = None,
     blog: Optional[Any] = None,
     dataset: Optional[Any] = None,
+    grounding_helper: Optional[Any] = None,
 ):
     """Build and compile the Exercise-Generation graph. Agents are injectable for tests.
 
     `github` is an awaitable callable `query -> material|None` (defaults to the resilient GitHub MCP
     lookup). `blog` / `dataset` default to a FactualAgent (live web search via ddgs).
     """
+    legacy_sources = grounding_helper is None and any(source is not None for source in (github, blog, dataset))
+    grounding_helper = grounding_helper or retrieve_evidence
     format_selector = format_selector or FormatSelectorAgent(push_to_langsmith=False)
     synthesizer = synthesizer or ExerciseSynthesizerAgent(push_to_langsmith=False)
     grader = grader or GraderAgent(push_to_langsmith=False)
@@ -72,6 +80,12 @@ def build_exercise_graph(
         if material is None:
             return None
         return material if isinstance(material, str) else str(material)
+
+    def prepare_evidence(state: ExerciseState) -> dict:
+        if state.get("grounding") is not None or legacy_sources:
+            return {}
+        return {"grounding": grounding_helper(state["user_query"], state.get("user_id"),
+                                               public_query=state.get("public_query"))}
 
     def format_selector_node(state: ExerciseState) -> dict:
         if not is_technical(state.get("learner_profile")):
@@ -103,7 +117,7 @@ def build_exercise_graph(
                 "format_reasoning": reason}
 
     async def github_node(state: ExerciseState) -> dict:
-        if not is_technical(state.get("learner_profile")):
+        if state.get("grounding") is not None or not is_technical(state.get("learner_profile")):
             return {"github_material": None}
         query = f"{state['user_query']} example projects"
         try:
@@ -114,16 +128,21 @@ def build_exercise_graph(
         return {"github_material": _material_to_text(material)}
 
     def blog_node(state: ExerciseState) -> dict:
+        if state.get("grounding") is not None:
+            return {"blog_material": None}
         query = f"best tutorials and guides for {state['user_query']}"
         return {"blog_material": blog.gather_facts(query)}
 
     def dataset_node(state: ExerciseState) -> dict:
-        if not is_technical(state.get("learner_profile")):
+        if state.get("grounding") is not None or not is_technical(state.get("learner_profile")):
             return {"dataset_material": None}
         query = f"public dataset Kaggle HuggingFace for {state['user_query']}"
         return {"dataset_material": dataset.gather_facts(query)}
 
     def synthesizer_node(state: ExerciseState) -> dict:
+        kwargs = {}
+        if state.get("grounding") is not None:
+            kwargs = {"knowledge_evidence": state["grounding"], "lesson_content": state.get("lesson_content")}
         statement = synthesizer.synthesize(
             with_profile(state["user_query"], state.get("learner_profile")),
             state.get("exercise_format", "coding_challenge"),
@@ -131,7 +150,11 @@ def build_exercise_graph(
             github_material=state.get("github_material"),
             blog_material=state.get("blog_material"),
             dataset_material=state.get("dataset_material"),
+            **kwargs,
         )
+        if state.get("grounding") is not None:
+            statement, bundle = validate_citations(statement, state["grounding"])
+            return {"exercise_statement": statement, "grounding": bundle}
         return {"exercise_statement": statement}
 
     def grader_node(state: ExerciseState) -> dict:
@@ -145,6 +168,7 @@ def build_exercise_graph(
         return {"grading_artifact": artifact.model_dump() if artifact else None}
 
     g = StateGraph(ExerciseState)
+    g.add_node("evidence", prepare_evidence)
     g.add_node("format_selector", format_selector_node)
     g.add_node("github", github_node)
     g.add_node("blog", blog_node)
@@ -152,13 +176,12 @@ def build_exercise_graph(
     g.add_node("synthesizer", synthesizer_node)
     g.add_node("grader", grader_node)
 
-    g.add_edge(START, "format_selector")
+    g.add_edge(START, "evidence")
+    g.add_edge("evidence", "format_selector")
     g.add_edge("format_selector", "github")
     g.add_edge("format_selector", "blog")
     g.add_edge("format_selector", "dataset")
-    g.add_edge("github", "synthesizer")
-    g.add_edge("blog", "synthesizer")
-    g.add_edge("dataset", "synthesizer")
+    g.add_edge(["github", "blog", "dataset"], "synthesizer")
     g.add_edge("synthesizer", "grader")
     g.add_edge("grader", END)
 

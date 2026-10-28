@@ -212,8 +212,8 @@ async def test_astream_session_emits_stage_per_node_in_graph_order(monkeypatch):
     # fan in to consensus.
     assert stages[0] == "orchestrator"
     assert stages[1] == "scout"
-    assert set(stages[2:5]) == {"academic", "market", "practical"}
-    assert stages[5:] == ["consensus", "reviewer"]
+    assert set(stages[2:6]) == {"academic", "market", "practical", "knowledge"}
+    assert stages[6:] == ["consensus", "reviewer"]
     assert all(e["label"] for e in stage_events)  # every stage carries a human-readable label
 
     terminal = events[-1]

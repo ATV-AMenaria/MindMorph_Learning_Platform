@@ -92,7 +92,7 @@ through the editor above.
   runs an in-process **Laya** decision model (`services/routing/laya_router.py`, sub-40ms, zero tokens, Apache 2.0).
   If Laya is missing, loading, or toggled off (`MINDMORPH_USE_LAYA=0`), the orchestrator seamlessly falls back
   to the Groq/Ollama LLM router. See [`docs/LAYA_ROUTING.md`](docs/LAYA_ROUTING.md) for architecture details.
-- **Neo4j Graph Architecture (Phase 3 Completed).** The core backend heavily relies on Neo4j for caching complex topics, tracking session mastery, and tracing AI thoughts. Read `docs/NEO4J_ARCHITECTURE.md` to learn how the Cypher Completion Engine computes adaptive learning paths.
+- **Grounded learning and session-owned Neo4j mirrors.** A fourth Knowledge Grounding Agent supplies document/shared/public evidence to roadmap planning. New lessons and practice share a frozen evidence bundle; tutor replies retain sources. Saved sessions enforce prerequisites and mastery, while Neo4j mirrors scoped snapshots. Fresh grounded paths bypass shared roadmap caches and persisted execution checkpoints. See [grounding setup and behavior](docs/GROUNDING.md) and [current graph architecture](docs/NEO4J_ARCHITECTURE.md).
   For local dev, `MINDMORPH_STORE=memory` skips all of that and keeps sessions in memory for the process lifetime.
 - **Real-time Kafka Event Streaming & Telemetry Bridge.** Student milestones (`lesson_opened`, `exercise_graded`, `node_mastered`, etc.) are streamed in real time via [`services/kafka_emitter.py`](services/kafka_emitter.py) and traced into LangSmith via [`services/telemetry.py`](services/telemetry.py). Unset `KAFKA_BOOTSTRAP_SERVERS` enables zero-infra dev mode with zero errors. See [`docs/KAFKA_TELEMETRY.md`](docs/KAFKA_TELEMETRY.md) for architecture and event schemas.
 
@@ -157,8 +157,12 @@ the headroom. Keep the model on the OpenAI OSS family; Groq has deprecated its L
 | `MINDMORPH_STORE` | `postgres` | Set to `memory` for zero-infra dev (as the quickstart does); the unset default is the durable Postgres store |
 | `DATABASE_URL` | `postgresql+psycopg://mindmorph:mindmorph@localhost:5432/mindmorph` | Matches `docker-compose.yml`, used when `MINDMORPH_STORE=postgres` |
 | `NEO4J_URI` | `bolt://localhost:7687` | Connection string for Neo4j Graph DB |
-| `MINDMORPH_RAG` | off | Toggles knowledge-base retrieval grounding |
-| `MINDMORPH_KNOWLEDGE_DIR` | `knowledge_base/` | Corpus loaded into the vector store at startup |
+| `MINDMORPH_RAG` | off | Enables shared seed retrieval; personal uploads remain independently eligible |
+| `MINDMORPH_KNOWLEDGE_DIR` | `knowledge_base/` | Shared corpus loaded lazily |
+| `MINDMORPH_WEB_RESEARCH` | on | Common bounded public research for grounding |
+| `MINDMORPH_RERANK` | on | Local MiniLM passage ranking, with an explicit degraded fallback |
+| `MINDMORPH_MODEL_CACHE` | optional | Common local embedding/ranking model cache directory |
+| `MINDMORPH_NEO4J_MIRROR` | on | Session-owned graph snapshots; session-derived locks work when disabled |
 | `MINDMORPH_USE_LAYA` | `1` | Enables fast local Laya decision router (1 = on, 0 = force LLM fallback) |
 | `MINDMORPH_LAYA_MODEL` | `convaiinnovations/laya` | Model identifier or local weights path for Laya |
 | `KAFKA_BOOTSTRAP_SERVERS` | unset | Comma-separated Kafka brokers (e.g. `localhost:9092`). Unset enables safe zero-infra dev mode |

@@ -103,7 +103,7 @@ def test_create_session_stream_emits_stages_then_terminal_frame(client, monkeypa
     """The streaming create route must emit one frame per LangGraph node (in order) before the
     terminal frame — the whole point being live progress instead of one static ~60s wait."""
 
-    async def fake_astream_session(query, fmt):
+    async def fake_astream_session(query, fmt, **kwargs):
         yield {"stage": "scout", "label": "Scout planning specialist queries"}
         yield {"stage": "academic", "label": "Academic agent researching"}
         yield {"stage": "consensus", "label": "Building consensus skill graph"}
@@ -139,7 +139,7 @@ def test_create_session_stream_surfaces_mid_stream_failure_as_error_frame(client
     """A mid-stream LLM/graph failure must arrive as an explicit error frame, never a stream that
     just stops with the client's spinner running forever."""
 
-    async def fake_astream_session(query, fmt):
+    async def fake_astream_session(query, fmt, **kwargs):
         yield {"stage": "scout", "label": "Scout planning specialist queries"}
         raise RuntimeError("llm provider 500: internal boom")
 

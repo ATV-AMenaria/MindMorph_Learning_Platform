@@ -28,6 +28,7 @@ from agents.synthesizer.synthesizer_agent import SynthesizerAgent
 from agents.visual_generator.visual_generator_agent import VisualGeneratorAgent
 
 from services.learner_profile import with_profile
+from rag.grounding import retrieve_evidence, evidence_prompt, validate_citations
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,8 @@ class ContentState(TypedDict, total=False):
     learner_profile: Optional[dict]
     primary_language: Optional[str]
     user_id: Optional[str]    # for per-user RAG retrieval (the user's ingested material)
+    public_query: Optional[str]
+    grounding: Optional[dict]
     creative_draft: str
     factual_findings: Optional[str]
     final_content: str
@@ -94,6 +97,7 @@ def build_content_graph(
     retriever: Optional[Any] = None,
     example: Optional[Any] = None,
     visual: Optional[Any] = None,
+    grounding_helper: Optional[Any] = None,
 ):
     """Build and compile the dual-path content graph. Agents are injectable for tests.
 
@@ -109,6 +113,10 @@ def build_content_graph(
     per-process (``services.learning_service._get_lesson_graph``), so the flag is a deploy-time setting,
     not a per-request toggle — changing the env after first build has no effect until restart.
     """
+    # Preserve the explicit legacy retriever/factual injection surface. Product callers
+    # use the common helper; a supplied bundle always takes precedence over fresh research.
+    legacy_sources = grounding_helper is None and (factual is not None or retriever is not None)
+    grounding_helper = grounding_helper or retrieve_evidence
     content = content or ContentAgent(push_to_langsmith=False)
     factual = factual or FactualAgent()
     synthesizer = synthesizer or SynthesizerAgent(push_to_langsmith=False)
@@ -131,6 +139,11 @@ def build_content_graph(
 
     def factual_node(state: ContentState) -> dict:
         query = state["user_query"]
+        if state.get("grounding") is not None or not legacy_sources:
+            bundle = state.get("grounding")
+            if bundle is None:
+                bundle = grounding_helper(query, state.get("user_id"), public_query=state.get("public_query"))
+            return {"factual_findings": evidence_prompt(bundle), "grounding": bundle}
         web = factual.gather_facts(query)
         retriever = _resolve_retriever(state, injected_retriever)
         kb = retriever.retrieve(query) if retriever else None
@@ -142,6 +155,9 @@ def build_content_graph(
             state.get("creative_draft", ""),
             state.get("factual_findings"),
         )
+        if state.get("grounding") is not None:
+            final, bundle = validate_citations(final, state["grounding"])
+            return {"final_content": final, "grounding": bundle}
         return {"final_content": final}
 
     def example_node(state: ContentState) -> dict:
@@ -171,7 +187,11 @@ def build_content_graph(
             parts.append(f"## Worked example\n\n{state['code_example']}")
         if state.get("visual_diagram"):
             parts.append(f"## Visual overview\n\n{state['visual_diagram']}")
-        return {"final_content": "\n\n".join(p for p in parts if p)}
+        final = "\n\n".join(p for p in parts if p)
+        if state.get("grounding") is not None:
+            final, bundle = validate_citations(final, state["grounding"])
+            return {"final_content": final, "grounding": bundle}
+        return {"final_content": final}
 
     g = StateGraph(ContentState)
     g.add_node("creative", creative_node)
@@ -180,8 +200,7 @@ def build_content_graph(
 
     g.add_edge(START, "creative")
     g.add_edge(START, "factual")
-    g.add_edge("creative", "synthesizer")
-    g.add_edge("factual", "synthesizer")
+    g.add_edge(["creative", "factual"], "synthesizer")
 
     if tail_on:
         g.add_node("example", example_node)
@@ -189,8 +208,7 @@ def build_content_graph(
         g.add_node("assembler", assembler_node)
         g.add_edge("synthesizer", "example")
         g.add_edge("synthesizer", "visual")
-        g.add_edge("example", "assembler")
-        g.add_edge("visual", "assembler")
+        g.add_edge(["example", "visual"], "assembler")
         g.add_edge("assembler", END)
     else:
         g.add_edge("synthesizer", END)

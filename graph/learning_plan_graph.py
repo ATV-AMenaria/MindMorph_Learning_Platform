@@ -1,11 +1,11 @@
 # Top-level MindMorph LangGraph state graph.
 #
 #   START -> orchestrator -> (route)
-#     SCOUT    -> scout -> [academic | market | practical] -> consensus -> reviewer -> END
+#     SCOUT    -> scout -> [academic | market | practical | knowledge] -> consensus -> reviewer -> END
 #     CONTENT  -> content (dual-path content sub-graph) -> END
-#     EXERCISE -> placeholder -> END   (Exercise DAG is P1, not yet built)
+#     EXERCISE -> grounded exercise sub-graph -> END
 #
-# The three specialists fan in to Consensus (one superstep join). Consensus emits a
+# The four specialists explicitly join before Consensus. Consensus emits a
 # Skill Dependency Graph (JSON), the renderer turns it into Mermaid, and Reviewer checks it.
 # Specialist / content nodes write distinct state keys, so fan-out needs no custom reducer.
 
@@ -23,7 +23,6 @@ if PROJECT_ROOT not in sys.path:
 logger = logging.getLogger(__name__)
 
 from langgraph.graph import StateGraph, START, END
-from langchain_neo4j import Neo4jGraph, Neo4jSaver
 
 from agents.orchestrator.orchestrator_agent import OrchestratorAgent
 from agents.scout.scout_agent import ScoutAgent
@@ -32,6 +31,8 @@ from agents.market.market_agent import MarketAnalysisAgent
 from agents.practical.practical_agent import PracticalAgent
 from agents.consensus.consensus_agent import ConsensusAgent
 from agents.reviewer.reviewer_agent import ReviewerAgent
+from agents.grounding.knowledge_grounding_agent import KnowledgeGroundingAgent
+from rag.grounding import empty_evidence, validate_citations
 from tools.github_mcp_client import MCPClientInitialization
 from graph.content_graph import build_content_graph
 from graph.exercise_graph import build_exercise_graph
@@ -52,6 +53,10 @@ class LearningPlanState(TypedDict, total=False):
     preferences: Optional[dict]
     primary_language: Optional[str]
     scope: Optional[str]
+    user_id: Optional[str]
+    graph_identity: Optional[str]
+    public_query: Optional[str]
+    grounding: Optional[dict]
     # Learning-plan branch
     scout_queries: dict
     academic_output: Optional[str]
@@ -169,6 +174,7 @@ def build_graph(
     format_selector: Optional[Any] = None,
     exercise_synthesizer: Optional[Any] = None,
     grader: Optional[Any] = None,
+    grounding: Optional[Any] = None,
 ):
     """Build and compile the full MindMorph graph.
 
@@ -183,6 +189,7 @@ def build_graph(
     practical = practical or PracticalAgent(push_to_langsmith=False)
     consensus = consensus or ConsensusAgent(push_to_langsmith=False)
     reviewer = reviewer or ReviewerAgent(push_to_langsmith=False)
+    grounding = grounding or KnowledgeGroundingAgent()
     content_graph = build_content_graph(content=content, factual=factual, synthesizer=synthesizer)
     exercise_graph = build_exercise_graph(
         format_selector=format_selector,
@@ -255,6 +262,7 @@ def build_graph(
         elif scope == "foundation":
             scope_instruction = "The learner wants a STRONG FOUNDATION path: start with fundamentals of the requested subject, then specialize. Do not add unrelated computer science or programming topics."
 
+        grounding_kwargs = {"knowledge_evidence": state["grounding"]} if (state.get("grounding") or {}).get("passages") else {}
         with span("graph.consensus"):
             sg = consensus.build_skill_graph(
                 with_profile(state["user_query"], state.get("learner_profile")),
@@ -262,6 +270,7 @@ def build_graph(
                 market_text,
                 state.get("practical_output"),
                 scope_instruction=scope_instruction,
+                **grounding_kwargs,
             )
         # Deterministic coherence repair, same invariant apply_adaptation enforces on adaptations:
         # an edge to a node id the model never emitted becomes an unmasterable prerequisite in
@@ -277,6 +286,7 @@ def build_graph(
                 with_profile(state["user_query"], state.get("learner_profile")),
                 state.get("academic_output"), market_text, state.get("practical_output"),
                 scope_instruction=scope_instruction + " Repair structural error: " + str(exc),
+                **grounding_kwargs,
             )
             graph_dict, dropped = prune_dangling_edges(sg)
             validate_skill_graph(graph_dict)
@@ -286,17 +296,36 @@ def build_graph(
                 state["user_query"], len(dropped),
                 [(e.get("source"), e.get("target")) for e in dropped],
             )
+        evidence = state.get("grounding") or empty_evidence()
+        for field in ("summary",):
+            if graph_dict.get(field):
+                graph_dict[field], evidence = validate_citations(graph_dict[field], evidence)
+        for node in graph_dict.get("nodes", []):
+            for field in ("label", "description"):
+                if node.get(field):
+                    node[field], evidence = validate_citations(node[field], evidence)
         return {
             "skill_graph": graph_dict,
             "skill_graph_mermaid": skill_graph_to_mermaid(graph_dict),
+            "grounding": evidence,
         }
+
+    async def knowledge_node(state: LearningPlanState) -> dict:
+        query = state.get("scout_queries", {}).get("KNOWLEDGE") or state["user_query"]
+        try:
+            bundle = await asyncio.to_thread(grounding.gather, query, state.get("user_id"),
+                                             public_query=state.get("public_query") or state["user_query"])
+        except Exception:
+            bundle = empty_evidence("unavailable")
+        return {"grounding": bundle}
 
     def reviewer_node(state: LearningPlanState) -> dict:
         sg = state.get("skill_graph")
         if not sg:
             return {"review_passed": False, "review_notes": "No skill graph was produced to review."}
         with span("graph.reviewer"):
-            res = reviewer.review_skill_graph(state["user_query"], json.dumps(sg))
+            kwargs = {"knowledge_evidence": state["grounding"]} if (state.get("grounding") or {}).get("passages") else {}
+            res = reviewer.review_skill_graph(with_profile(state["user_query"], state.get("learner_profile")), json.dumps(sg), **kwargs)
         if not res:
             logger.warning("Reviewer failed to evaluate the skill graph for %r", state["user_query"])
             return {"review_passed": False, "review_notes": "Reviewer failed to evaluate the skill graph."}
@@ -314,20 +343,24 @@ def build_graph(
 
     async def content_node(state: LearningPlanState) -> dict:
         out = await content_graph.ainvoke(
-            {"user_query": state["user_query"], "format_type": state.get("format_type", "B"), "primary_language": state.get("primary_language"), "learner_profile": state.get("learner_profile")}
+            {"user_query": state["user_query"], "format_type": state.get("format_type", "B"), "primary_language": state.get("primary_language"), "learner_profile": state.get("learner_profile"),
+             "user_id": state.get("user_id"), "public_query": state.get("public_query") or state["user_query"]}
         )
         return {
             "creative_draft": out.get("creative_draft"),
             "factual_findings": out.get("factual_findings"),
             "final_content": out.get("final_content"),
+            "grounding": out.get("grounding"),
         }
 
     async def exercise_node(state: LearningPlanState) -> dict:
-        out = await exercise_graph.ainvoke({"user_query": state["user_query"], "primary_language": state.get("primary_language"), "learner_profile": state.get("learner_profile")})
+        out = await exercise_graph.ainvoke({"user_query": state["user_query"], "primary_language": state.get("primary_language"), "learner_profile": state.get("learner_profile"),
+                                           "user_id": state.get("user_id"), "public_query": state.get("public_query") or state["user_query"]})
         return {
             "exercise_format": out.get("exercise_format"),
             "exercise_statement": out.get("exercise_statement"),
             "grading_artifact": out.get("grading_artifact"),
+            "grounding": out.get("grounding"),
         }
 
     def placeholder_node(state: LearningPlanState) -> dict:
@@ -339,6 +372,7 @@ def build_graph(
     g.add_node("academic", academic_node)
     g.add_node("market", market_node)
     g.add_node("practical", practical_node)
+    g.add_node("knowledge", knowledge_node)
     g.add_node("consensus", consensus_node)
     g.add_node("reviewer", reviewer_node)
     g.add_node("content", content_node)
@@ -355,9 +389,8 @@ def build_graph(
     g.add_edge("scout", "academic")
     g.add_edge("scout", "market")
     g.add_edge("scout", "practical")
-    g.add_edge("academic", "consensus")
-    g.add_edge("market", "consensus")
-    g.add_edge("practical", "consensus")
+    g.add_edge("scout", "knowledge")
+    g.add_edge(["academic", "market", "practical", "knowledge"], "consensus")
     g.add_edge("consensus", "reviewer")
     g.add_edge("reviewer", END)
     # Content branch.
@@ -367,14 +400,6 @@ def build_graph(
     # Other routes.
     g.add_edge("placeholder", END)
 
-    try:
-        neo4j_graph = Neo4jGraph(
-            url=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-            username=os.getenv("NEO4J_USER", "neo4j"),
-            password=os.getenv("NEO4J_PASSWORD", "mindmorph_neo4j")
-        )
-        saver = Neo4jSaver(graph=neo4j_graph)
-        return g.compile(checkpointer=saver)
-    except Exception as e:
-        logger.warning(f"Could not connect to Neo4j Checkpointer, running without checkpointer: {e}")
-        return g.compile()
+    # Grounded state can contain private passages. Session persistence owns that data;
+    # do not duplicate it into an automatic/shared execution checkpointer.
+    return g.compile()

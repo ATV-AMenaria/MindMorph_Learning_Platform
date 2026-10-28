@@ -1,5 +1,6 @@
 import type { LearningSession } from "@/lib/types";
 import { Modal } from "./Modal";
+import { EvidenceSources, citedText } from "./EvidenceSources";
 
 interface PathSummaryModalProps {
   session: LearningSession;
@@ -75,7 +76,7 @@ export function PathSummaryModal({ session, query, domain, onExplore }: PathSumm
         <div className="p-6 md:p-8">
           {/* Summary */}
           {session.summary && (
-            <p className="text-sm text-text mb-5 leading-relaxed">{session.summary}</p>
+            <p className="text-sm text-text mb-5 leading-relaxed">{citedText(session.summary, session.grounding)}</p>
           )}
 
           {/* Stats grid */}
@@ -127,6 +128,8 @@ export function PathSummaryModal({ session, query, domain, onExplore }: PathSumm
               Our reviewer flagged a possible gap — still fully usable.
             </div>
           )}
+
+          <EvidenceSources evidence={session.grounding} />
 
           {/* CTA */}
           <button

@@ -13,6 +13,11 @@ import pytest
 from services import learning_service as svc
 
 
+@pytest.fixture(autouse=True)
+def no_live_assessment(monkeypatch):
+    monkeypatch.setattr(svc, "_run_assessment", lambda *args, **kwargs: None)
+
+
 def _usage(tokens_in=100, tokens_out=50, cost=0.0001):
     """Canned TokenMeter.totals() for stubbed _run_lesson mocks (now returns (out, usage))."""
     return {"tokens_in": tokens_in, "tokens_out": tokens_out, "est_cost_usd": cost,

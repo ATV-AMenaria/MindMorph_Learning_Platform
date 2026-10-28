@@ -84,6 +84,7 @@ class StartSessionResponse(BaseModel):
     learning_session: Optional[dict[str, Any]] = None
     final_content: Optional[str] = None
     exercise: Optional[dict[str, Any]] = None
+    grounding: Optional[dict[str, Any]] = None
 
 
 class SessionResponse(BaseModel):

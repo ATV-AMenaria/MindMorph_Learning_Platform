@@ -25,6 +25,8 @@ from services.learner_profile import make_profile, with_profile
 from services.cost import TokenMeter
 from services.events import STAGES, has_event, record_event
 from services.timing import collect, span, spans_payload
+from services.generation_privacy import private_generation
+from rag.grounding import retrieve_evidence, evidence_prompt, validate_citations
 from services.mastery import (
     MASTERY_THRESHOLD,
     REVIEW_THRESHOLD,
@@ -234,6 +236,7 @@ class StaleExerciseError(ValueError):
     pass
 
 
+@private_generation
 def new_learning_session(
     final_state: dict, 
     format_type: str,
@@ -264,6 +267,9 @@ def new_learning_session(
         "market_output": final_state.get("market_output"),
         "practical_output": final_state.get("practical_output"),
         "format_type": format_type,
+        "grounding": final_state.get("grounding"),
+        "graph_identity": final_state.get("graph_identity") or uuid.uuid4().hex,
+        "public_query": final_state.get("public_query"),
         "node_state": {
             n["id"]: default_node_state() for n in skill_graph["nodes"]
         },
@@ -297,6 +303,7 @@ STAGE_LABELS = {
     "academic": "Academic agent researching",
     "market": "Market agent analyzing job data",
     "practical": "Practical agent finding projects",
+    "knowledge": "Finding teaching evidence",
     "consensus": "Building consensus skill graph",
     "reviewer": "Reviewing the skill graph",
     "content": "Composing content",
@@ -334,125 +341,58 @@ def _route_final_state(final_state: dict, format_type: str, timing: Optional[dic
                 "statement": final_state.get("exercise_statement"),
                 "grading_artifact": final_state.get("grading_artifact"),
             }
+    out["grounding"] = final_state.get("grounding")
     return out
 
 
+@private_generation
 def start_session(user_query: str, format_type: str = "B",
                   preferences: Optional[dict] = None,
                   primary_language: Optional[str] = None,
                   scope: Optional[str] = None,
-                  domain: Optional[str] = None) -> dict:
-    """Run the orchestration graph for a query and return the routed payload.
-
-    Returns ``{"route", "learning_session", "final_content", "exercise"}``. Only the SCOUT route
-    yields a persistable ``learning_session`` (the adaptive loop); CONTENT/EXERCISE are transient.
-    """
+                  domain: Optional[str] = None,
+                  user_id: Optional[str] = None) -> dict:
+    """Fresh grounded planning; shared roadmap caches never contain private evidence."""
     profile = make_profile(preferences, primary_language, scope, domain, user_query)
-    domain = profile.get("domain")
-    primary_language, scope = profile.get("primary_language"), profile.get("scope")
-    logger.info("service: start_session (query=%r, format=%s)", user_query, format_type)
-    canonical = _cache_topic(user_query, profile)
-
-    # ── Cache check: return immediately if graph already built ────────────────
-    cached_graph = _get_graph_from_cache(canonical)
-    if cached_graph:
-        # Mock a final state shape for new_learning_session
-        ls = new_learning_session({"skill_graph": cached_graph}, format_type, preferences, primary_language, scope, domain)
-        if ls:
-            ls["usage"]["cache_hits"] = 1
-            return {"route": "SCOUT", "learning_session": ls, "final_content": None, "exercise": None}
-    # ─────────────────────────────────────────────────────────────────────────
-
+    identity = uuid.uuid4().hex
+    inputs = {"user_query": user_query, "public_query": user_query,
+              "user_id": user_id, "graph_identity": identity, "format_type": format_type,
+              "learner_profile": profile, "preferences": preferences,
+              "primary_language": profile.get("primary_language"), "scope": profile.get("scope")}
     with collect() as spans, span("graph.total"):
-        final_state = _run_async(
-            _get_orchestration_graph().ainvoke({
-                "user_query": user_query, 
-                "format_type": format_type,
-                "learner_profile": profile,
-                "preferences": preferences,
-                "primary_language": primary_language,
-                "scope": scope
-            })
-        )
-    final_state["canonical_topic"] = canonical
-    result = _route_final_state(final_state, format_type, spans_payload(spans), preferences, primary_language, scope, domain)
-
-    # ── Save the new graph to cache after pipeline completes ──────────────────
-    if result.get("route") == "SCOUT":
-        ls = result.get("learning_session")
-        if ls:
-            sg = ls.get("skill_graph")
-            if sg:
-                _save_graph_to_cache(canonical, user_query, sg)
-    # ─────────────────────────────────────────────────────────────────────────
-
-    return result
+        final_state = _run_async(_get_orchestration_graph().ainvoke(inputs))
+    final_state.update(graph_identity=identity, canonical_topic=identity, public_query=user_query)
+    return _route_final_state(final_state, format_type, spans_payload(spans), preferences,
+                              profile.get("primary_language"), profile.get("scope"), profile.get("domain"))
 
 
+@private_generation
 async def astream_session(user_query: str, format_type: str = "B",
                           preferences: Optional[dict] = None,
                           primary_language: Optional[str] = None,
                           scope: Optional[str] = None,
-                          domain: Optional[str] = None):
-    """Async-native, streaming twin of ``start_session``.
-
-    Runs the SAME compiled orchestration graph via ``.astream(..., stream_mode="updates")`` on the
-    route's own event loop (no ``_run_async`` fresh-loop wrapper — this must be awaited directly from
-    an async caller). Yields ``{"stage": <node name>, "label": <human label>}`` as each LangGraph node
-    finishes, then a final ``{"result": <same shape as start_session's return>}``.
-
-    State keys are distinct per node (see graph/learning_plan_graph.py), so accumulating each node's
-    partial update into ``final_state`` reproduces exactly what ``ainvoke`` would have returned.
-    """
+                          domain: Optional[str] = None,
+                          user_id: Optional[str] = None):
+    """Streaming twin with the same caller context and no shared graph cache access."""
     profile = make_profile(preferences, primary_language, scope, domain, user_query)
-    domain = profile.get("domain")
-    primary_language, scope = profile.get("primary_language"), profile.get("scope")
-    logger.info("service: astream_session (query=%r, format=%s)", user_query, format_type)
-    canonical = _cache_topic(user_query, profile)
-
-    # ── Cache check: return immediately if graph already built ────────────────
-    cached_graph = _get_graph_from_cache(canonical)
-    if cached_graph:
-        ls = new_learning_session({"skill_graph": cached_graph, "canonical_topic": canonical}, format_type,
-                                  preferences, primary_language, scope, domain)
-        if ls:
-            ls["usage"]["cache_hits"] = 1
-            yield {"stage": "cache", "label": "Loading from cache"}
-            yield {"result": {"route": "SCOUT", "learning_session": ls, "final_content": None, "exercise": None}}
-            return
-    # ─────────────────────────────────────────────────────────────────────────
-
-    final_state: dict = {}
+    identity = uuid.uuid4().hex
+    inputs = {"user_query": user_query, "public_query": user_query,
+              "user_id": user_id, "graph_identity": identity, "format_type": format_type,
+              "learner_profile": profile, "preferences": preferences,
+              "primary_language": profile.get("primary_language"), "scope": profile.get("scope")}
+    final_state = {}
     with collect() as spans, span("graph.total"):
-        async for update in _get_orchestration_graph().astream(
-            {
-                "user_query": user_query, 
-                "format_type": format_type,
-                "learner_profile": profile,
-                "preferences": preferences,
-                "primary_language": primary_language,
-                "scope": scope
-            }, stream_mode="updates"
-        ):
+        async for update in _get_orchestration_graph().astream(inputs, stream_mode="updates"):
             for node_name, node_output in update.items():
                 final_state.update(node_output or {})
                 yield {"stage": node_name, "label": STAGE_LABELS.get(node_name, node_name)}
-
-    final_state["canonical_topic"] = canonical
-    result = _route_final_state(final_state, format_type, spans_payload(spans), preferences, primary_language, scope, domain)
-
-    # ── Save the new graph to cache after pipeline completes ──────────────────
-    if result.get("route") == "SCOUT":
-        ls = result.get("learning_session")
-        if ls:
-            sg = ls.get("skill_graph")
-            if sg:
-                _save_graph_to_cache(canonical, user_query, sg)
-    # ─────────────────────────────────────────────────────────────────────────
-
+    final_state.update(graph_identity=identity, canonical_topic=identity, public_query=user_query)
+    result = _route_final_state(final_state, format_type, spans_payload(spans), preferences,
+                                profile.get("primary_language"), profile.get("scope"), profile.get("domain"))
     yield {"result": result}
 
 
+@private_generation
 def _run_lesson(
     node: dict,
     format_type: str,
@@ -461,6 +401,7 @@ def _run_lesson(
     path_context: Optional[str] = None,
     primary_language: Optional[str] = None,
     learner_profile: Optional[dict] = None,
+    public_query: Optional[str] = None,
 ) -> tuple[dict, dict]:
     """Invoke the lesson graph for one skill node (content + embedded exercise).
 
@@ -477,6 +418,7 @@ def _run_lesson(
                 "format_type": format_type,
                 "prior_weaknesses": prior_weaknesses,
                 "user_id": user_id,
+                "public_query": public_query,
                 "path_context": path_context,
                 "learner_profile": learner_profile,
                 "primary_language": primary_language,
@@ -487,12 +429,54 @@ def _run_lesson(
     return out, meter.totals()
 
 
+@private_generation
+def _repair_missing_grading_artifact(ls: dict, node_id: str) -> None:
+    """Retry failed grading setup without replacing the exercise or learner state.
+
+    Generation returns None when its runtime dependencies are unavailable. That None used to be
+    cached permanently, even after the runtime was fixed. Existing artifacts are left untouched;
+    their normal validation still distinguishes broken tests from learner failures.
+    """
+    lesson = ls["lessons"][node_id]
+    exercise = lesson.get("exercise") or {}
+    if (exercise.get("format") != "coding_challenge"
+            or exercise.get("grading_artifact") is not None
+            or not exercise.get("statement")):
+        return
+
+    from agents.exercise.grader_agent import GraderAgent
+
+    logger.info("service: rebuilding missing grading harness for node %s", node_id)
+    meter = TokenMeter()
+    try:
+        artifact = GraderAgent(push_to_langsmith=False).build_grading_artifact(
+            with_profile(ls.get("summary") or "Practice this skill", ls.get("learner_profile")),
+            exercise["format"],
+            exercise["statement"],
+            exercise_language=exercise.get("language"),
+            callbacks=[meter],
+        )
+        if artifact is not None:
+            exercise["grading_artifact"] = artifact.model_dump()
+    except Exception:
+        # A failed retry must still leave the submission ungraded, with no mastery changes.
+        logger.exception("service: grading harness repair failed for node %s", node_id)
+    finally:
+        repair_usage = meter.totals()
+        lesson["grading_repair_usage"] = repair_usage
+        usage = ls.setdefault("usage", _empty_usage())
+        for key in ("tokens_in", "tokens_out"):
+            usage[key] += repair_usage[key]
+        usage["est_cost_usd"] = round(usage["est_cost_usd"] + repair_usage["est_cost_usd"], 6)
+
+
+@private_generation
 def open_lesson(ls: dict, node_id: str, user_id: Optional[str] = None) -> dict:
     """Compose (or reuse cached) the lesson for a node and mark it selected. Mutates and returns ls.
 
     Enforces prerequisite locking server-side: opening a locked node raises ``LockedNodeError`` so the
-    gate cannot be bypassed by a client. A cached lesson is reused (cost guard — re-opening never
-    rebuilds). ``user_id`` (when given) routes per-user RAG retrieval in the content sub-graph.
+    gate cannot be bypassed by a client. Cached content and exercises are reused; only failed grading
+    setup is retried. ``user_id`` routes per-user RAG retrieval in the content sub-graph.
     """
     skill_graph = ls["skill_graph"]
     if node_id not in {n["id"] for n in skill_graph["nodes"]}:
@@ -520,6 +504,8 @@ def open_lesson(ls: dict, node_id: str, user_id: Optional[str] = None) -> dict:
         logger.info("service: composing lesson for node %s", node_id)
         with collect() as spans, span("lesson.total"):
             lesson_kwargs = {"path_context": ls.get("summary")}
+            if ls.get("public_query"):
+                lesson_kwargs["public_query"] = ls["public_query"]
             if ls.get("learner_profile"):
                 lesson_kwargs["learner_profile"] = ls["learner_profile"]
             if ls.get("primary_language") is not None:
@@ -530,11 +516,13 @@ def open_lesson(ls: dict, node_id: str, user_id: Optional[str] = None) -> dict:
             )
         ls["lessons"][node_id] = {
             "content": out.get("content"),
+            "grounding": out.get("grounding"),
             "exercise": {
                 "revision": uuid.uuid4().hex,
                 "format": out.get("exercise_format"),
                 "language": out.get("exercise_language"),
                 "statement": out.get("exercise_statement"),
+                "grounding": out.get("grounding"),
                 "grading_artifact": out.get("grading_artifact"),
             },
             "usage": lesson_usage,
@@ -551,6 +539,7 @@ def open_lesson(ls: dict, node_id: str, user_id: Optional[str] = None) -> dict:
         )
         record_event(ls, STAGES.LESSON_OPENED, node_id=node_id, cache_hit=False)
     else:
+        _repair_missing_grading_artifact(ls, node_id)
         usage["cache_hits"] += 1
         logger.info("service: lesson %s HIT (cache_hits=%d)", node_id, usage["cache_hits"])
         record_event(ls, STAGES.LESSON_OPENED, node_id=node_id, cache_hit=True)
@@ -558,6 +547,7 @@ def open_lesson(ls: dict, node_id: str, user_id: Optional[str] = None) -> dict:
     return ls
 
 
+@private_generation
 def adapt_after_grade(ls: dict, node_id: str) -> list[str]:
     """Phase 3 — close the loop: a graded node mutates the graph (remedial nodes / unlock edges) and,
     on a low score, invalidates the cached lesson so the next open regenerates against the gaps.
@@ -611,6 +601,7 @@ def adapt_after_grade(ls: dict, node_id: str) -> list[str]:
     return new_ids
 
 
+@private_generation
 def grade(ls: dict, node_id: str, solution: str, exercise_revision: Optional[str] = None) -> tuple[dict, list[str], dict | None]:
     """Grade a node's exercise submission, capture mastery, and run adaptation.
 
@@ -633,6 +624,7 @@ def grade(ls: dict, node_id: str, solution: str, exercise_revision: Optional[str
     if exercise.get("revision") is not None and exercise_revision != exercise["revision"]:
         raise StaleExerciseError("This exercise has changed. Reload the lesson before submitting again.")
     fmt = exercise.get("format") or "coding_challenge"
+    _repair_missing_grading_artifact(ls, node_id)
     artifact = exercise.get("grading_artifact") or {}
 
     from agents.exercise.grader_agent import grade_submission
@@ -763,28 +755,20 @@ def _node_label(ls: dict, node_id: Optional[str]) -> str:
     return ls.get("summary") or "this topic"
 
 
-def build_tutor_messages(ls: dict, node_id: Optional[str], question: str, user_id: Optional[str]):
-    """Assemble grounded chat messages: open-lesson content + the user's RAG material + prior history.
+def tutor_retrieval_query(ls: dict, node_id: Optional[str], question: str) -> str:
+    node = next((node for node in ls.get("skill_graph", {}).get("nodes", []) if node.get("id") == node_id), {})
+    context = ": ".join(str(node.get(key) or "") for key in ("label", "description")).strip(": ")
+    return f"{context}\nQuestion: {question}" if context else question
 
-    Calls ``retrieve`` directly (no ``_run_async`` — this runs inside the route's event loop)."""
+
+@private_generation
+def build_tutor_messages(ls: dict, node_id: Optional[str], question: str,
+                         user_id: Optional[str], *, evidence: Optional[dict] = None):
+    """Shared fresh evidence plus historical lesson/chat; caller runs this off the event loop."""
     lesson = (ls.get("lessons") or {}).get(node_id) or {}
-    lesson_content = lesson.get("content")
-
-    rag_context = None
-    if user_id:
-        try:
-            from rag import registry
-
-            store = registry.get_user_store(user_id)
-            if store is not None and not store.is_empty:
-                rag_context = store.retrieve(question)
-        except Exception:
-            logger.exception("tutor: RAG retrieval failed; continuing without it")
-
+    bundle = evidence if evidence is not None else retrieve_evidence(
+        tutor_retrieval_query(ls, node_id, question), user_id, public_query=ls.get("public_query"))
     return _get_tutor_agent().build_messages(
         skill_label=_node_label(ls, node_id),
-        lesson_content=with_profile(lesson_content or "", ls.get("learner_profile")) or lesson_content,
-        rag_context=rag_context,
-        history=ls.get("chat", []),
-        question=question,
-    )
+        lesson_content=with_profile(lesson.get("content") or "", ls.get("learner_profile")),
+        rag_context=evidence_prompt(bundle), history=ls.get("chat", []), question=question)
