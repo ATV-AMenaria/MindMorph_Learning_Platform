@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 const port = Number(process.env.PLAYWRIGHT_PORT ?? 3102);
 const baseURL = `http://127.0.0.1:${port}`;
+const production = process.env.PLAYWRIGHT_PRODUCTION === "1";
 
 // E2E runs against the dev server with the API fully mocked (page.route), so the suite is fast and
 // deterministic and needs neither the FastAPI service nor an LLM key.
@@ -17,10 +18,10 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: `node node_modules/next/dist/bin/next dev -p ${port}`,
+    command: `node node_modules/next/dist/bin/next ${production ? "start" : "dev"} -p ${port}`,
     url: baseURL,
     reuseExistingServer: false,
-    env: { NEXT_DIST_DIR: ".next-e2e" },
+    env: { NEXT_DIST_DIR: production ? ".next-p2-8-build" : ".next-e2e" },
     timeout: 120_000,
   },
 });

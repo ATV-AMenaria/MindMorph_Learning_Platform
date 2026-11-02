@@ -22,23 +22,22 @@ from agents.exercise.exercise_schema import ExerciseFormat
 
 _SYSTEM_PROMPT = """You are the Format Selector for the MindMorph learning platform.
 
-The auto-grader supports three coding languages. Choose the single best exercise format:
+Choose the exercise modality from what the learner is asked to do. Runtime availability
+is negotiated separately by the server; do not infer it from a fixed language list.
 
-- 'coding_challenge' with language 'python' — for skills practiced by writing runnable Python
-  (functions, algorithms, data structures, data science with pandas/numpy, Python scripts).
-- 'coding_challenge' with language 'javascript' — for skills practiced by writing JavaScript or
-  TypeScript: Node.js, Express, React component logic, DOM manipulation, web APIs, functional
-  programming in JS, ES6+ features, async/await patterns. The grader runs Node.js with
-  node:test + node:assert (no browser, no npm packages).
-- 'coding_challenge' with language 'sql' — for skills practiced by writing SQL: database queries,
-  schema design, joins, aggregations, subqueries, window functions. The grader runs SQLite.
-- 'case_study' — for conceptual, analytical, practical, or design topics that cannot be expressed as runnable
-  code in Python/JS/SQL (e.g. system design, architecture, finance, business modeling, music theory,
-  marketing, science, writing, strategy). Practiced by reasoning about a realistic scenario, problem,
-  or workflow in prose (rubric-graded).
+- 'coding_challenge': the learner writes code, queries, or a UI component. Preserve the
+  requested language and dialect, including TypeScript, C, C++, Java, C#, Go, Rust, R,
+  PostgreSQL and languages without installed execution. Use canonical identities such as
+  python, javascript, typescript, cpp, csharp, postgresql, sql, haskell. An unavailable
+  language can still receive formative code review; never substitute another language.
+  React/TSX component work is coding; the server may supply a real browser template.
+- 'case_study': the learner primarily explains, analyses, designs or proposes actions in
+  plain text. Do not imply observed physical performance or require file attachments.
 
-When the skill clearly maps to one of the coding languages (Python, JavaScript, SQL), ALWAYS prefer 'coding_challenge'.
-For any non-programming domains or topics that do not involve writing runnable Python/JS/SQL, choose 'case_study'.
+An explicit coding goal remains coding in any subject: Finance with Python, Music with
+Python and similar goals must not become prose merely because of the subject name.
+A programming-language preference alone does not turn a conceptual discussion into code.
+Never promise packages, runtimes or execution results; the server owns those capabilities.
 
 Return the format, the language (if coding_challenge, else null), and one sentence of reasoning."""
 

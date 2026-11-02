@@ -10,6 +10,7 @@ import { FollowUpModal } from "@/components/FollowUpModal";
 import { PathSummaryModal } from "@/components/PathSummaryModal";
 import { EvidenceSources, citedText } from "@/components/EvidenceSources";
 import type { FollowUpQuestion, LearningSession, StartSessionResponse } from "@/lib/types";
+import { newRequestId } from "@/lib/useDraft";
 
 export default function HomePage() {
   const { userId, ready, signIn, signOut } = useUser();
@@ -86,11 +87,14 @@ function Dashboard({ userId, onSignOut }: { userId: string; onSignOut: () => voi
   const [showSummary, setShowSummary] = useState(false);
   const [summarySession, setSummarySession] = useState<LearningSession | null>(null);
   const [summarySessionId, setSummarySessionId] = useState<string | null>(null);
+  type PendingCreate = { query: string; answers: Record<string, string>; requestId: string; language: string | null; domain: string };
+  const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
 
   const sessions = useQuery({
     queryKey: ["sessions", userId],
     queryFn: () => api.listSessions(userId),
   });
+  const exercises = useQuery({ queryKey: ["exercises", userId], queryFn: () => api.listExercises(userId) });
 
   async function handleCreate() {
     if (!query.trim() || creating) return;
@@ -117,6 +121,14 @@ function Dashboard({ userId, onSignOut }: { userId: string; onSignOut: () => voi
   }
 
   async function handleFollowUpSubmit(answers: Record<string, string>) {
+    const requestId = newRequestId();
+    const pending = { query, answers, requestId, language: detectedLanguage, domain: detectedDomain };
+    setPendingCreate(pending);
+    await createWithPreferences(pending);
+  }
+
+  async function createWithPreferences(pending: PendingCreate) {
+    const { answers } = pending;
     setShowFollowUp(false);
     setFollowUpFailed(false);
     setCreating(true);
@@ -127,25 +139,29 @@ function Dashboard({ userId, onSignOut }: { userId: string; onSignOut: () => voi
     const scope = answers.scope || "foundation";
 
     try {
-      await api.startSessionStream(userId, query, "B", {
+      await api.startSessionStream(userId, pending.query, "B", {
         preferences: answers,
-        primary_language: answers.language || answers.primary_language || detectedLanguage,
+        primary_language: answers.language || answers.primary_language || pending.language,
         scope: scope,
-        domain: detectedDomain,
+        domain: pending.domain,
+        request_id: pending.requestId,
         onStage: (_stage, label) => setStageLabel(label),
         onDone: (res) => {
           setCreating(false);
           setStageLabel(null);
           qc.invalidateQueries({ queryKey: ["sessions", userId] });
           if (res.session_id && res.learning_session) {
+            setPendingCreate(null);
             // Show summary card instead of immediately navigating
             setSummarySession(res.learning_session as LearningSession);
             setSummarySessionId(res.session_id);
             setShowSummary(true);
           } else if (res.session_id) {
+            setPendingCreate(null);
             // Fallback: navigate directly if no learning_session in response
             router.push(`/session/${res.session_id}`);
           } else {
+            setPendingCreate(null);
             setDirectResponse(res);
             setCreateNotice("Your answer is ready below.");
           }
@@ -218,6 +234,7 @@ function Dashboard({ userId, onSignOut }: { userId: string; onSignOut: () => voi
             {createError}
           </p>
         )}
+        {createError && pendingCreate && <button type="button" className="accent-ring mt-3 rounded-lg border px-4 py-2" disabled={creating} onClick={() => void createWithPreferences(pendingCreate)}>Retry with the same choices</button>}
         {followUpFailed && !creating && <button type="button" className="accent-ring mt-3 rounded-lg border px-4 py-2" onClick={() => void handleFollowUpSubmit({})}>Continue without questions</button>}
         {createNotice && (
           <div role="status" className="mt-3">
@@ -256,6 +273,12 @@ function Dashboard({ userId, onSignOut }: { userId: string; onSignOut: () => voi
       )}
 
       <KnowledgeUpload userId={userId} />
+
+      <section className="mt-10">
+        <h2 className="text-sm uppercase tracking-wider text-text-muted">Saved exercises</h2>
+        {exercises.isError && <p role="alert" className="mt-3 text-sm">Could not load saved exercises. <button className="underline" onClick={() => void exercises.refetch()}>Retry</button></p>}
+        <div className="mt-4 grid gap-3">{exercises.data?.map((exercise) => <button key={exercise.id} type="button" onClick={() => router.push(`/exercise/${encodeURIComponent(exercise.id!)}`)} className="surface accent-ring flex items-center justify-between p-5 text-left"><span className="font-medium text-text-strong">{exercise.statement?.split("\n")[0]?.slice(0,100) || "Saved exercise"}</span><span className="text-sm text-text-muted">Resume →</span></button>)}</div>
+      </section>
 
       {sessions.isError && <p role="alert">Could not load saved paths. <button onClick={() => void sessions.refetch()}>Retry saved paths</button></p>}
       <section className="mt-10">

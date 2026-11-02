@@ -176,21 +176,21 @@ def test_grade_timing_names_the_work_that_actually_ran(monkeypatch, fmt, expecte
     import agents.exercise.grader_agent as grader
 
     monkeypatch.setattr(grader, "grade_submission",
-                        lambda f, s, a: {"score": 90.0, "passed": True, "feedback": "ok"})
+                        lambda f, s, a: _evidence({"score": 90.0, "feedback": "ok"}) if f == "coding_challenge" else {"status": "feedback_only", "method": "rubric", "score": None})
     monkeypatch.setattr(svc, "adapt_after_grade", lambda ls, node_id: [])
     ls = _session_with_lesson()
     ls["lessons"]["n1"] = {"content": "c", "exercise": {"format": fmt, "grading_artifact": {}}}
     ls, _, _ = svc.grade(ls, "n1", "solution")
     timing = ls["timing"]["grade"]
     assert expected in timing
-    assert "grade.adapt" in timing  # test execution vs the adaptation LLM call, split
+    assert ("grade.adapt" in timing) is (fmt == "coding_challenge")
 
 
 def test_grade_timing_stays_bounded_across_repeated_submissions(monkeypatch):
     import agents.exercise.grader_agent as grader
 
     monkeypatch.setattr(grader, "grade_submission",
-                        lambda f, s, a: {"score": 90.0, "passed": True, "feedback": "ok"})
+                        lambda f, s, a: _evidence({"score": 90.0, "passed": True, "feedback": "ok"}))
     monkeypatch.setattr(svc, "adapt_after_grade", lambda ls, node_id: [])
     ls = _session_with_lesson()
     ls["lessons"]["n1"] = {"content": "c",
@@ -198,3 +198,10 @@ def test_grade_timing_stays_bounded_across_repeated_submissions(monkeypatch):
     for _ in range(5):
         ls, _, _ = svc.grade(ls, "n1", "solution")
     assert set(ls["timing"]["grade"]) == {"grade.tests", "grade.adapt"}  # last grade only, never a list
+
+
+def _evidence(raw):
+    """Completed check evidence for state/timing tests; not a model total."""
+    score = float(raw["score"])
+    return {**raw, "method": "execution", "passed": round(score * 100), "total": 10000,
+            "failures": [] if score == 100 else ["Fixture learner check failed"]}

@@ -4,13 +4,14 @@ The ``learning_session`` itself is passed through as an open dict (``data``) —
 and its shape is owned by the services layer, not re-declared here (which would drift). These models
 only type the thin request envelopes and list metadata.
 """
-from typing import Any, Optional
+from typing import Any, Optional, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 from services.learner_profile import make_profile
 
 
 class CreateSessionRequest(BaseModel):
+    _creation_token: str | None = PrivateAttr(default=None)
     user_id: str = Field(..., min_length=1)
     query: str = Field(..., min_length=1)
     format_type: str = "B"
@@ -18,6 +19,7 @@ class CreateSessionRequest(BaseModel):
     primary_language: Optional[str] = None
     scope: Optional[str] = None
     domain: Optional[str] = None
+    request_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def normalize_profile(self):
@@ -40,8 +42,21 @@ class FollowUpResponse(BaseModel):
 
 
 class GradeRequest(BaseModel):
-    solution: str
+    solution: str = Field(max_length=262144)
     exercise_revision: Optional[str] = None
+    attempt_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+
+
+class RunRequest(BaseModel):
+    solution: str = Field(max_length=262144)
+    stdin: str = Field(default="", max_length=262144)
+    exercise_revision: Optional[str] = None
+    run_id: str = Field(min_length=1, max_length=128)
+
+
+class NewPracticeRequest(BaseModel):
+    exercise_revision: Optional[str] = None
+    request_id: str = Field(min_length=1, max_length=128)
 
 
 class IngestResponse(BaseModel):
@@ -50,7 +65,9 @@ class IngestResponse(BaseModel):
 
 
 class AssessmentAnswersRequest(BaseModel):
-    answers: list[int]  # one 0-based option index per question; -1 = unanswered/skipped
+    answers: Optional[list[int]] = None
+    action: Literal["submit", "skip", "resume"] = "submit"
+    quiz_revision: Optional[str] = None
 
 
 class ChatRequest(BaseModel):
@@ -86,6 +103,14 @@ class StartSessionResponse(BaseModel):
     exercise: Optional[dict[str, Any]] = None
     grounding: Optional[dict[str, Any]] = None
 
+    @model_validator(mode="after")
+    def project_public(self):
+        from services.public_projection import public_session, public_exercise
+        if self.learning_session is not None:
+            self.learning_session = public_session(self.learning_session)
+        self.exercise = public_exercise(self.exercise)
+        return self
+
 
 class SessionResponse(BaseModel):
     session_id: str
@@ -98,3 +123,10 @@ class SessionResponse(BaseModel):
     # node_state.last_feedback because adaptation clears that field on the remediation path, and the
     # learner still has to be able to read the score and feedback that failed them.
     grade_result: Optional[dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def project_public(self):
+        from services.public_projection import public_session, public_result
+        self.learning_session = public_session(self.learning_session)
+        self.grade_result = public_result(self.grade_result)
+        return self

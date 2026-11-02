@@ -48,12 +48,22 @@ export interface GradingArtifact {
 }
 
 export interface Exercise {
+  id?: string;
   grounding?: GroundingInfo | null;
   revision?: string;
   format?: "coding_challenge" | "case_study" | null;
-  language?: "python" | "javascript" | "sql" | null;
+  language?: string | null;
   statement?: string | null;
+  status?: string;
+  instructions?: string;
+  execution_profile?: string;
+  availability?: { status?: string; reason?: string };
+  rubric?: { criterion_id?: string; criterion?: string; max_points?: number }[];
   grading_artifact?: GradingArtifact | null;
+  assessment?: { method?: string; status?: string; profile_id?: string; instructions?: string; [key: string]: unknown } | null;
+  last_result?: GradeResult | null;
+  attempts?: number;
+  history?: GradeResult[];
 }
 
 export interface Lesson {
@@ -63,11 +73,15 @@ export interface Lesson {
 }
 
 export interface GradeResult {
+  applied?: boolean;
+  status?: "graded" | "feedback_only" | "needs_evidence" | "pending" | "retryable_error" | "platform_error" | "invalid_submission";
+  mastery_eligible?: boolean;
+  attempt_id?: string;
   // Set when the generated tests could not run at all (missing library, undeclared import, absent
   // data file). No score is reported — the submission was never measured, and nothing about the
   // learner may be inferred from it.
   harness_error?: boolean;
-  score?: number;
+  score?: number | null;
   passed?: number;
   total?: number;
   failures?: string[];
@@ -75,6 +89,17 @@ export interface GradeResult {
   timed_out?: boolean;
   per_criterion?: string[];
   feedback?: string;
+  message?: string;
+}
+
+export interface RunResult {
+  run_id: string;
+  status: string;
+  stdout?: string;
+  stderr?: string;
+  message?: string;
+  elapsed_ms?: number;
+  profile_id?: string;
 }
 
 export interface MCQQuestion {
@@ -82,7 +107,7 @@ export interface MCQQuestion {
   node_id: string;
   question: string;
   options: string[];
-  correct_index: number;
+  correct_index?: number;
   explanation?: string;
 }
 
@@ -102,6 +127,8 @@ export interface AssessmentResult {
 export interface Assessment {
   quiz: AssessmentQuiz;
   submitted: boolean;
+  status?: "pending" | "skipped" | "submitted";
+  quiz_revision?: string;
   results?: AssessmentResult[];
 }
 

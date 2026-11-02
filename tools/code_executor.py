@@ -363,8 +363,31 @@ def _execute(files, command, timeout, javascript=False):
 
 def execute_tests(solution_code, test_code, timeout=DEFAULT_TIMEOUT_SECONDS):
     if not test_code or not test_code.strip(): return _harness_result(["No unit tests were generated for this exercise."])
-    return _execute({"solution.py": solution_code or "", "test_solution.py": test_code, "_runner.py": _RUNNER_SRC},
-                    [sys.executable, "_runner.py"], timeout)
+    import ast
+    empty_checks = False
+    try:
+        tree = ast.parse(test_code)
+        functions = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        def observes(nodes, seen=frozenset()):
+            for node in nodes:
+                for n in ast.walk(node):
+                    if isinstance(n, ast.Assert) and not isinstance(n.test, ast.Constant):
+                        return True
+                    if isinstance(n, ast.Call):
+                        if isinstance(n.func, ast.Attribute) and (n.func.attr.startswith("assert") or n.func.attr == "raises"):
+                            return True
+                        if isinstance(n.func, ast.Name) and n.func.id in functions and n.func.id not in seen and observes(functions[n.func.id].body, seen | {n.func.id}):
+                            return True
+            return False
+        tests = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name.startswith("test")]
+        empty_checks = (tests and any(not observes(n.body) for n in tests)) or (not tests and not observes(tree.body))
+    except SyntaxError:
+        return _harness_result(["The generated test module is not valid Python."])
+    result = _execute({"solution.py": solution_code or "", "test_solution.py": test_code, "_runner.py": _RUNNER_SRC},
+                      [sys.executable, "_runner.py"], timeout)
+    if empty_checks and result.get("passed", 0) > 0 and not result.get("harness_error"):
+        return _harness_result(["The test artifact contains a completed check without a meaningful assertion."])
+    return result
 
 
 def execute_javascript(solution_code, test_code, timeout=DEFAULT_TIMEOUT_SECONDS):
@@ -394,11 +417,15 @@ def check_test_artifact(unit_tests: List[str]) -> Optional[str]:
     match = _FILE_IO_RE.search(src)
     if match: return f"tests read an external file ({match.group(0)!r}); the sandbox has no data files"
     result = execute_tests(_STUB_SOLUTION, src)
+    if result.get("total", 0) > 0 and result.get("passed") == result.get("total") and not result.get("harness_error"):
+        return "The tests accept a non-solution; a negative control must fail."
     return "; ".join(result["failures"]) if result.get("harness_error") else None
 
 
 def check_test_artifact_js(unit_tests: List[str]) -> Optional[str]:
     result = execute_javascript(_STUB_JS_SOLUTION, "\n".join(unit_tests or []))
+    if result.get("total", 0) > 0 and result.get("passed") == result.get("total") and not result.get("harness_error"):
+        return "The tests accept a non-solution; a negative control must fail."
     return "; ".join(result["failures"]) if result.get("harness_error") else None
 
 

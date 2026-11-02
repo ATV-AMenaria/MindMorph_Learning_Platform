@@ -18,10 +18,11 @@ class ExerciseFormat(BaseModel):
             "'case_study' for analytical/design tasks judged against a rubric."
         )
     )
-    language: Optional[CodingLanguageType] = Field(
+    language: Optional[str] = Field(
         default=None,
         description=(
-            "The coding language for a coding_challenge: 'python', 'javascript', or 'sql'. "
+            "The requested coding language or SQL dialect, preserving its identity (for example "
+            "python, javascript, typescript, cpp, postgresql or haskell). "
             "Must be set when format is 'coding_challenge'; ignored for 'case_study'."
         ),
     )

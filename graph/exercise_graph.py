@@ -33,6 +33,7 @@ from rag.grounding import retrieve_evidence, validate_citations
 
 
 class ExerciseState(TypedDict, total=False):
+    execution_capability: Optional[dict]
     user_query: str
     exercise_format: str          # 'coding_challenge' | 'case_study'
     exercise_language: Optional[str]  # 'python' | 'javascript' | 'sql'
@@ -99,21 +100,35 @@ def build_exercise_graph(
             reason = None
         else:
             fmt = result.format
-            lang = (result.language if result.language == "sql" else primary) or result.language or "python"
+            dialect = primary if primary in {"postgresql", "sqlite", "mysql"} else None
+            lang = ((dialect or result.language) if result.language == "sql" else primary) or result.language or "python"
             reason = result.reasoning
             
         # The editor, saved artifact and execution router share the same canonical identifiers.
         # Unsupported languages remain prose exercises rather than silently executing Python.
         if fmt == "coding_challenge":
-            try:
-                lang = normalize_language(lang)
-            except ValueError:
-                fmt, lang = "case_study", None
+            from tools.grading_contract import language_identity
+            lang = language_identity(lang)
         else:
             lang = None
 
+        capability = {}
+        if fmt == "coding_challenge":
+            from services.grading_gateway import capabilities
+            from tools.runtime_profiles import PROFILES
+            candidates = {"python": "python-data" if any(w in state["user_query"].lower() for w in ("data", "pandas", "numpy", "machine learning", "scikit")) else "python-core",
+                          "javascript": "javascript-node", "typescript": "typescript-node", "sql": "sqlite"}
+            profile = candidates.get(lang, lang)
+            if any(word in state["user_query"].lower() for word in ("react", "tsx", "dom component")) and lang in {"javascript", "typescript", "react", "tsx"}:
+                profile = "react-dom"
+            enabled = capabilities().get(profile, {})
+            if enabled.get("available") and profile in PROFILES:
+                capability = {"profile_id": profile, "revision": enabled["revision"],
+                              "entrypoint": PROFILES[profile].entrypoint, "packages": enabled.get("packages", []),
+                              "contract": enabled.get("contract", "")}
         return {"exercise_format": fmt,
                 "exercise_language": lang,
+                "execution_capability": capability,
                 "format_reasoning": reason}
 
     async def github_node(state: ExerciseState) -> dict:
@@ -143,8 +158,13 @@ def build_exercise_graph(
         kwargs = {}
         if state.get("grounding") is not None:
             kwargs = {"knowledge_evidence": state["grounding"], "lesson_content": state.get("lesson_content")}
+        query = with_profile(state["user_query"], state.get("learner_profile"))
+        capability = state.get("execution_capability")
+        if capability:
+            import json
+            query += "\nRuntime contract: " + json.dumps(capability) + ". Follow this exact contract (a React component for browser tasks, a complete stdin/stdout program otherwise). State the input/output or interaction requirements, provide visible examples, and use only these packages. Include any small fixture data in the task. Do not require downloads."
         statement = synthesizer.synthesize(
-            with_profile(state["user_query"], state.get("learner_profile")),
+            query,
             state.get("exercise_format", "coding_challenge"),
             exercise_language=state.get("exercise_language"),
             github_material=state.get("github_material"),
@@ -159,11 +179,13 @@ def build_exercise_graph(
 
     def grader_node(state: ExerciseState) -> dict:
         language = state.get("exercise_language") or "python"
+        extra = {"execution_capability": state.get("execution_capability", {})} if isinstance(grader, GraderAgent) else {}
         artifact = grader.build_grading_artifact(
             with_profile(state["user_query"], state.get("learner_profile")),
             state.get("exercise_format", "coding_challenge"),
             state.get("exercise_statement") or "",
             exercise_language=language,
+            **extra,
         )
         return {"grading_artifact": artifact.model_dump() if artifact else None}
 

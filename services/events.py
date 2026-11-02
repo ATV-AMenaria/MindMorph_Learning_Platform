@@ -65,27 +65,44 @@ def has_event(ls: dict, stage: str) -> bool:
 
 
 def funnel_summary(ls: dict) -> dict:
-    """Derive funnel, drop-off, and content-quality aggregates from the raw event timeline.
+    """Derive funnel + content-quality aggregates from the event timeline.
 
-    Single source of truth: derives everything from ``ls["events"]``; never caches state.
-    Missing / empty events timeline safely returns a zeroed summary (legacy-session safe).
+    Everything here is computed from ``ls["events"]`` — the timeline is the single source of truth, so a
+    field added/renamed in ``record_event`` flows through without a second place to update.
     """
     events = ls.get("events", [])
-    counts: dict[str, int] = {}
+    stage_counts: dict[str, int] = {}
+    scores: list[float] = []
+    opened_nodes: set[str] = set()
+    flagged_nodes: list[str] = []
     for e in events:
         stage = e.get("stage")
-        if stage:
-            counts[stage] = counts.get(stage, 0) + 1
+        if stage is None:  # malformed event (not via record_event) — don't pollute the aggregate
+            continue
+        stage_counts[stage] = stage_counts.get(stage, 0) + 1
+        if stage == STAGES.LESSON_OPENED and e.get("node_id") is not None:
+            opened_nodes.add(e["node_id"])
+        elif stage == STAGES.EXERCISE_GRADED and e.get("score") is not None:
+            scores.append(float(e["score"]))
+        elif stage == STAGES.CONTENT_FLAGGED and e.get("node_id") is not None:
+            flagged_nodes.append(e["node_id"])
 
+    low_scores = sum(1 for s in scores if s < REVIEW_THRESHOLD)
+    last = events[-1] if events else None
     return {
+        "stage_counts": stage_counts,
+        "distinct_nodes_opened": len(opened_nodes),
+        "scores": scores,
+        "low_score_count": low_scores,  # graded < REVIEW_THRESHOLD — proxy for "content may be wrong"
+        "regenerations": stage_counts.get(STAGES.LESSON_REGENERATED, 0),
+        "content_flags": len(flagged_nodes),  # explicit learner thumbs-down
+        "flagged_nodes": flagged_nodes,
+        "failures": stage_counts.get(STAGES.COMPOSE_FAILURE, 0)
+        + stage_counts.get(STAGES.GRADE_FAILURE, 0),
+        "reached_grade": STAGES.EXERCISE_GRADED in stage_counts,
+        "completed": STAGES.PATH_COMPLETED in stage_counts,
+        "last_stage": last["stage"] if last else None,  # the drop point
+        "last_ts": last["ts"] if last else None,
+        "event_count": len(events),
         "total_events": len(events),
-        "stage_counts": counts,
-        "reached_grade": counts.get(STAGES.EXERCISE_GRADED, 0) > 0,
-        "completed": counts.get(STAGES.PATH_COMPLETED, 0) > 0,
-        "low_score_count": counts.get(STAGES.NODE_NEEDS_REVIEW, 0),
-        "regenerations": counts.get(STAGES.LESSON_REGENERATED, 0),
-        "content_flags": counts.get(STAGES.CONTENT_FLAGGED, 0),
-        "failures": (
-            counts.get(STAGES.COMPOSE_FAILURE, 0) + counts.get(STAGES.GRADE_FAILURE, 0)
-        ),
     }

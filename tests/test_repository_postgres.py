@@ -127,7 +127,7 @@ def test_postgres_state_survives_fresh_api_processes(repo, user_id):
     state["assessment"] = {"submitted": True, "results": [{"question_id": "q1", "is_correct": True}]}
     repo.save(user_id, "restart", state)
     code = '''import json, sys
-from fastapi.testclient import TestClient
+from tests.api_client import AuthenticatedClient as TestClient
 from api.main import app
 user = json.load(sys.stdin)
 with TestClient(app) as client:
@@ -159,7 +159,7 @@ def test_real_database_outage_and_recovery(repo, user_id, monkeypatch):
     import json
     import subprocess
     import time
-    from fastapi.testclient import TestClient
+    from tests.api_client import AuthenticatedClient as TestClient
     from api.main import app
     from persistence.errors import StorageUnavailableError
     from persistence.repository import _memory_singleton

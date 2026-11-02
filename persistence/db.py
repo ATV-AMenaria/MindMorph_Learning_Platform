@@ -64,3 +64,4 @@ def check_ready() -> None:
             raise RuntimeError("Database migrations are pending")
         connection.execute(text("SELECT revision FROM learning_sessions LIMIT 0"))
         connection.execute(text("SELECT embedding, source_id, page FROM rag_chunks LIMIT 0"))
+        connection.execute(text("SELECT user_id, record_id, kind, data FROM grading_records LIMIT 0"))

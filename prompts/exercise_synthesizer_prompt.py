@@ -13,10 +13,25 @@ topics, use coding_challenge format. For non-coding topics (music, business, des
 cooking, writing, etc.), use case_study, written_analysis, or practical_task format.
 
 Rules:
+- The server runtime contract, when supplied in the goal context, overrides the legacy coding
+  conventions below. Follow its exact entrypoint, packages and input/output protocol. For React,
+  request a default App.tsx component for the trusted real-browser template. For a stdin/stdout
+  profile, request a complete program rather than an exported function. Do not invent packages.
+- The learner can submit ONE code file or a PLAIN TEXT response in this application. Written and
+  non-coding tasks MUST be answerable in the response box. Never require a PDF, image, audio/video,
+  file upload, external document, screenshot or unimplemented submission control. A sketch can be
+  described in words or optional text notation. Practical activity may inform a reflection or plan,
+  but self-reported activity is formative feedback, never proof of physical performance.
+- Keep beginner practice within the concepts actually taught. Do not turn an introductory syntax
+  lesson into building a parser, formatter, linter or grader unless that is the explicit skill.
+  Prefer a small direct application with clear requirements. Keep the statement concise; verify
+  example record counts and outputs against the stated rules. Describe success conditions in words;
+  the grading setup owns the published numeric rubric, so do not invent a conflicting points table.
 - Honour the chosen EXERCISE FORMAT:
   - coding_challenge: a concrete programming task. State the exact function/class name and signature
     the learner must implement (so automated unit tests can target it), inputs, expected outputs, and
-    1-2 worked examples. Keep it solvable in a single self-contained file in the requested `Coding language`
+    1-2 worked examples. These function/module conventions apply ONLY when no server runtime
+    contract was supplied. Keep it solvable in a single self-contained file in the requested `Coding language`
     (e.g., a Python module `solution.py`, a JavaScript module `solution.js`, or a SQL script `solution.sql`).
     The task is auto-graded by unit tests that run in an empty sandbox, so it MUST NOT depend on any
     file, path, download, or bundled dataset. Let DATASET MATERIAL shape the realistic domain and
@@ -24,7 +39,7 @@ Rules:
       * For Python: The function takes its data as ordinary arguments (lists, dicts, DataFrame). Only standard library, `pandas`, and `numpy` are available.
       * For JavaScript: The module should use CommonJS (`module.exports`) to export the requested function(s). Only standard Node.js built-ins are available (no npm packages, no DOM).
       * For SQL: State the schema of the tables the learner must create, and the data they must insert before writing their query.
-  - case_study: an analytical / design task. Give a realistic scenario, the deliverable expected, and
+  - case_study: an analytical / design task submitted as plain text. Give a realistic scenario, the written deliverable expected, and
     what a strong answer addresses. Suitable for business, design, strategy, and similar domains.
   - written_analysis: a written response exercise. Provide a topic or question, specify the expected
     depth and structure (e.g., essay, report, comparison), and describe what a strong answer covers.

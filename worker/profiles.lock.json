@@ -1,0 +1,285 @@
+{
+  "probe_version": 1,
+  "profiles": {
+    "python-core": {
+      "image": "sha256:c472d6b7fd439b976ecdf819fd65249ad2650133aae92b1b771260d516358c90",
+      "revision": "1",
+      "manifest_hash": "9a1bbc7a0ba0b299eedd781f3f88ae2ceee1cda8f91e6d4444b1fe14c171397a",
+      "actual_versions": {
+        "python": "3.11.18",
+        "sqlite": "3.40.1",
+        "node": "v22.23.4",
+        "typescript": "Version 5.7.3",
+        "gcc": null,
+        "g++": null,
+        "java": null,
+        "mono": null,
+        "go": null,
+        "rustc": null,
+        "R": null,
+        "postgresql": null
+      },
+      "probes_passed": true
+    },
+    "python-data": {
+      "image": "sha256:c472d6b7fd439b976ecdf819fd65249ad2650133aae92b1b771260d516358c90",
+      "revision": "1",
+      "manifest_hash": "b0981c91aca0e98747d3e64cbed7b69c5338c7922f51a373323490aa74f0e57d",
+      "actual_versions": {
+        "python": "3.11.18",
+        "sqlite": "3.40.1",
+        "node": "v22.23.4",
+        "typescript": "Version 5.7.3",
+        "gcc": null,
+        "g++": null,
+        "java": null,
+        "mono": null,
+        "go": null,
+        "rustc": null,
+        "R": null,
+        "postgresql": null
+      },
+      "probes_passed": true
+    },
+    "javascript-node": {
+      "image": "sha256:c472d6b7fd439b976ecdf819fd65249ad2650133aae92b1b771260d516358c90",
+      "revision": "1",
+      "manifest_hash": "647fb2ca2a4a3486d816602a1bd36673f73333f43a4b40fe5bdbaa1a0bbdbe53",
+      "actual_versions": {
+        "python": "3.11.18",
+        "sqlite": "3.40.1",
+        "node": "v22.23.4",
+        "typescript": "Version 5.7.3",
+        "gcc": null,
+        "g++": null,
+        "java": null,
+        "mono": null,
+        "go": null,
+        "rustc": null,
+        "R": null,
+        "postgresql": null
+      },
+      "probes_passed": true
+    },
+    "typescript-node": {
+      "image": "sha256:c472d6b7fd439b976ecdf819fd65249ad2650133aae92b1b771260d516358c90",
+      "revision": "2",
+      "manifest_hash": "740ca8deb6c0c844ec486eb371601ad7680a9657d40176515956f022f797e27c",
+      "actual_versions": {
+        "python": "3.11.18",
+        "sqlite": "3.40.1",
+        "node": "v22.23.4",
+        "typescript": "Version 5.7.3",
+        "gcc": null,
+        "g++": null,
+        "java": null,
+        "mono": null,
+        "go": null,
+        "rustc": null,
+        "R": null,
+        "postgresql": null
+      },
+      "probes_passed": true
+    },
+    "sqlite": {
+      "image": "sha256:c472d6b7fd439b976ecdf819fd65249ad2650133aae92b1b771260d516358c90",
+      "revision": "1",
+      "manifest_hash": "acc56514e8748578eb2cae5af17c49eed174aec8f02ecc668f012c0150ecec14",
+      "actual_versions": {
+        "python": "3.11.18",
+        "sqlite": "3.40.1",
+        "node": "v22.23.4",
+        "typescript": "Version 5.7.3",
+        "gcc": null,
+        "g++": null,
+        "java": null,
+        "mono": null,
+        "go": null,
+        "rustc": null,
+        "R": null,
+        "postgresql": null
+      },
+      "probes_passed": true
+    },
+    "c": {
+      "image": "sha256:3442580fed16e9b222db2ed41a8fa72ba2accf9edb0f27cc44a61dd2cca65d9c",
+      "revision": "1",
+      "manifest_hash": "2a893ca8dd9f7a42d5c34520b8a33190c338a21416288358698100d7d6d76d1c",
+      "actual_versions": {
+        "python": "3.11.18",
+        "node": "v22.23.4",
+        "typescript": "Version 5.7.3",
+        "gcc": "gcc (Debian 12.2.0-14+deb12u1) 12.2.0",
+        "g++": "g++ (Debian 12.2.0-14+deb12u1) 12.2.0",
+        "java": "openjdk version \"17.0.21\" 2026-10-20",
+        "mono": "Mono JIT compiler version 6.8.0.105 (Debian 6.8.0.105+dfsg-3.3+deb12u1 Sat Jun 21 16:33:59 UTC 2025)",
+        "go": "go version go1.19.8 linux/amd64",
+        "rustc": "rustc 1.63.0",
+        "R": "R version 4.2.2 Patched (2022-11-10 r83330) -- \"Innocent and Trusting\"",
+        "postgresql": "psql (PostgreSQL) 15.19 (Debian 15.19-0+deb12u1)"
+      },
+      "probes_passed": true
+    },
+    "cpp": {
+      "image": "sha256:3442580fed16e9b222db2ed41a8fa72ba2accf9edb0f27cc44a61dd2cca65d9c",
+      "revision": "1",
+      "manifest_hash": "73ec27df0cb07806b2bfa17a22df5e976f5ec8e36d35d67087d896aa3fc10cc6",
+      "actual_versions": {
+        "python": "3.11.18",
+        "node": "v22.23.4",
+        "typescript": "Version 5.7.3",
+        "gcc": "gcc (Debian 12.2.0-14+deb12u1) 12.2.0",
+        "g++": "g++ (Debian 12.2.0-14+deb12u1) 12.2.0",
+        "java": "openjdk version \"17.0.21\" 2026-10-20",
+        "mono": "Mono JIT compiler version 6.8.0.105 (Debian 6.8.0.105+dfsg-3.3+deb12u1 Sat Jun 21 16:33:59 UTC 2025)",
+        "go": "go version go1.19.8 linux/amd64",
+        "rustc": "rustc 1.63.0",
+        "R": "R version 4.2.2 Patched (2022-11-10 r83330) -- \"Innocent and Trusting\"",
+        "postgresql": "psql (PostgreSQL) 15.19 (Debian 15.19-0+deb12u1)"
+      },
+      "probes_passed": true
+    },
+    "java": {
+      "image": "sha256:3442580fed16e9b222db2ed41a8fa72ba2accf9edb0f27cc44a61dd2cca65d9c",
+      "revision": "1",
+      "manifest_hash": "2f2bb767c98040f2732341b2dac4774c41b0107bf3fa772a728117c25167a2f3",
+      "actual_versions": {
+        "python": "3.11.18",
+        "node": "v22.23.4",
+        "typescript": "Version 5.7.3",
+        "gcc": "gcc (Debian 12.2.0-14+deb12u1) 12.2.0",
+        "g++": "g++ (Debian 12.2.0-14+deb12u1) 12.2.0",
+        "java": "openjdk version \"17.0.21\" 2026-10-20",
+        "mono": "Mono JIT compiler version 6.8.0.105 (Debian 6.8.0.105+dfsg-3.3+deb12u1 Sat Jun 21 16:33:59 UTC 2025)",
+        "go": "go version go1.19.8 linux/amd64",
+        "rustc": "rustc 1.63.0",
+        "R": "R version 4.2.2 Patched (2022-11-10 r83330) -- \"Innocent and Trusting\"",
+        "postgresql": "psql (PostgreSQL) 15.19 (Debian 15.19-0+deb12u1)"
+      },
+      "probes_passed": true
+    },
+    "csharp": {
+      "image": "sha256:3442580fed16e9b222db2ed41a8fa72ba2accf9edb0f27cc44a61dd2cca65d9c",
+      "revision": "1",
+      "manifest_hash": "bd59255e09d5f2de063a9ce9de70eec2782d4d6721215cf6691f4ecf1c907d23",
+      "actual_versions": {
+        "python": "3.11.18",
+        "node": "v22.23.4",
+        "typescript": "Version 5.7.3",
+        "gcc": "gcc (Debian 12.2.0-14+deb12u1) 12.2.0",
+        "g++": "g++ (Debian 12.2.0-14+deb12u1) 12.2.0",
+        "java": "openjdk version \"17.0.21\" 2026-10-20",
+        "mono": "Mono JIT compiler version 6.8.0.105 (Debian 6.8.0.105+dfsg-3.3+deb12u1 Sat Jun 21 16:33:59 UTC 2025)",
+        "go": "go version go1.19.8 linux/amd64",
+        "rustc": "rustc 1.63.0",
+        "R": "R version 4.2.2 Patched (2022-11-10 r83330) -- \"Innocent and Trusting\"",
+        "postgresql": "psql (PostgreSQL) 15.19 (Debian 15.19-0+deb12u1)"
+      },
+      "probes_passed": true
+    },
+    "go": {
+      "image": "sha256:3442580fed16e9b222db2ed41a8fa72ba2accf9edb0f27cc44a61dd2cca65d9c",
+      "revision": "1",
+      "manifest_hash": "4e21dc14f78de89343237a22062d0d602d8ef8971e9d54a36adbed974ad7d534",
+      "actual_versions": {
+        "python": "3.11.18",
+        "node": "v22.23.4",
+        "typescript": "Version 5.7.3",
+        "gcc": "gcc (Debian 12.2.0-14+deb12u1) 12.2.0",
+        "g++": "g++ (Debian 12.2.0-14+deb12u1) 12.2.0",
+        "java": "openjdk version \"17.0.21\" 2026-10-20",
+        "mono": "Mono JIT compiler version 6.8.0.105 (Debian 6.8.0.105+dfsg-3.3+deb12u1 Sat Jun 21 16:33:59 UTC 2025)",
+        "go": "go version go1.19.8 linux/amd64",
+        "rustc": "rustc 1.63.0",
+        "R": "R version 4.2.2 Patched (2022-11-10 r83330) -- \"Innocent and Trusting\"",
+        "postgresql": "psql (PostgreSQL) 15.19 (Debian 15.19-0+deb12u1)"
+      },
+      "probes_passed": true
+    },
+    "rust": {
+      "image": "sha256:3442580fed16e9b222db2ed41a8fa72ba2accf9edb0f27cc44a61dd2cca65d9c",
+      "revision": "1",
+      "manifest_hash": "ca997f388a1dd38bae89fb6524588d9fcb0ee78e3c8fcda0e1e4e618b424e9fa",
+      "actual_versions": {
+        "python": "3.11.18",
+        "node": "v22.23.4",
+        "typescript": "Version 5.7.3",
+        "gcc": "gcc (Debian 12.2.0-14+deb12u1) 12.2.0",
+        "g++": "g++ (Debian 12.2.0-14+deb12u1) 12.2.0",
+        "java": "openjdk version \"17.0.21\" 2026-10-20",
+        "mono": "Mono JIT compiler version 6.8.0.105 (Debian 6.8.0.105+dfsg-3.3+deb12u1 Sat Jun 21 16:33:59 UTC 2025)",
+        "go": "go version go1.19.8 linux/amd64",
+        "rustc": "rustc 1.63.0",
+        "R": "R version 4.2.2 Patched (2022-11-10 r83330) -- \"Innocent and Trusting\"",
+        "postgresql": "psql (PostgreSQL) 15.19 (Debian 15.19-0+deb12u1)"
+      },
+      "probes_passed": true
+    },
+    "r": {
+      "image": "sha256:3442580fed16e9b222db2ed41a8fa72ba2accf9edb0f27cc44a61dd2cca65d9c",
+      "revision": "1",
+      "manifest_hash": "682a275cc69fee82babe908658981ad2e87a720d675f6f624f87c44ac2394851",
+      "actual_versions": {
+        "python": "3.11.18",
+        "node": "v22.23.4",
+        "typescript": "Version 5.7.3",
+        "gcc": "gcc (Debian 12.2.0-14+deb12u1) 12.2.0",
+        "g++": "g++ (Debian 12.2.0-14+deb12u1) 12.2.0",
+        "java": "openjdk version \"17.0.21\" 2026-10-20",
+        "mono": "Mono JIT compiler version 6.8.0.105 (Debian 6.8.0.105+dfsg-3.3+deb12u1 Sat Jun 21 16:33:59 UTC 2025)",
+        "go": "go version go1.19.8 linux/amd64",
+        "rustc": "rustc 1.63.0",
+        "R": "R version 4.2.2 Patched (2022-11-10 r83330) -- \"Innocent and Trusting\"",
+        "postgresql": "psql (PostgreSQL) 15.19 (Debian 15.19-0+deb12u1)"
+      },
+      "probes_passed": true
+    },
+    "postgresql": {
+      "image": "sha256:3442580fed16e9b222db2ed41a8fa72ba2accf9edb0f27cc44a61dd2cca65d9c",
+      "revision": "1",
+      "manifest_hash": "1c41b2c57e9af9807eb4cc8955042131c3ce2a9ac7cef59f1a647d99e02901fe",
+      "actual_versions": {
+        "python": "3.11.18",
+        "node": "v22.23.4",
+        "typescript": "Version 5.7.3",
+        "gcc": "gcc (Debian 12.2.0-14+deb12u1) 12.2.0",
+        "g++": "g++ (Debian 12.2.0-14+deb12u1) 12.2.0",
+        "java": "openjdk version \"17.0.21\" 2026-10-20",
+        "mono": "Mono JIT compiler version 6.8.0.105 (Debian 6.8.0.105+dfsg-3.3+deb12u1 Sat Jun 21 16:33:59 UTC 2025)",
+        "go": "go version go1.19.8 linux/amd64",
+        "rustc": "rustc 1.63.0",
+        "R": "R version 4.2.2 Patched (2022-11-10 r83330) -- \"Innocent and Trusting\"",
+        "postgresql": "psql (PostgreSQL) 15.19 (Debian 15.19-0+deb12u1)"
+      },
+      "probes_passed": true
+    },
+    "react-dom": {
+      "image": "sha256:9af42848ad8618e3fa494e272f12a1bdeb93cfd7932d6e2ea29be0968e1e59ec",
+      "revision": "2",
+      "manifest_hash": "67a72b8f22bb62e54713df25b6cd3a5602b37ecfdac01fadeb31f86e92b774af",
+      "actual_versions": {
+        "python": "3.11.18",
+        "node": "v22.23.4",
+        "typescript": "Version 5.7.3",
+        "chromium": "Chromium 156.0.8078.73 built on Debian GNU/Linux 12 (bookworm)",
+        "gcc": null,
+        "g++": null,
+        "java": null,
+        "mono": null,
+        "go": null,
+        "rustc": null,
+        "R": null,
+        "postgresql": null
+      },
+      "probes_passed": true
+    }
+  },
+  "build": {
+    "image": "sha256:c472d6b7fd439b976ecdf819fd65249ad2650133aae92b1b771260d516358c90",
+    "base_images": {
+      "PYTHON_IMAGE": "python@sha256:94a8fee35252d06ab75856f15f12c7bae67b10e8a6da93c7fded82b2610926cd",
+      "NODE_IMAGE": "node@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da"
+    }
+  },
+  "evidence": "logs/p2-8-implementation/worker-probes.json"
+}

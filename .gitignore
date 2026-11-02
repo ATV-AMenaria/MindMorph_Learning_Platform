@@ -1,4 +1,5 @@
 .env
+worker/host.local.json
 *.env
 .venv/
 __pycache__/
