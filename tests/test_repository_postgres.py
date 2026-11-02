@@ -121,6 +121,7 @@ def test_postgres_state_survives_fresh_api_processes(repo, user_id):
     import subprocess
     from sqlalchemy import text
     from persistence.db import get_engine
+    from services.public_projection import public_session
     state = _ls("restart")
     state["node_state"]["a"].update(status="mastered", best_score=100, attempts=1)
     state["lessons"] = {"a": {"content": "Saved lesson", "exercise": {"revision": "saved-v1"}}}
@@ -144,7 +145,10 @@ with TestClient(app) as client:
                                     capture_output=True, timeout=30, cwd=ROOT,
                                     env={**os.environ, "MINDMORPH_STORE": "postgres", "GROQ_API_KEYS": ""})
             assert result.returncode == 0, result.stderr[-2000:]
-            assert json.loads(result.stdout.strip().splitlines()[-1]) == state
+            # HTTP responses normalize legacy diagnostics and omit private graders;
+            # persistence must still retain the original saved representation.
+            assert json.loads(result.stdout.strip().splitlines()[-1]) == public_session(state)
+            assert repo.get(user_id, "restart") == state
     finally:
         repo.delete(user_id, "restart")
 
