@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { AssessmentQuiz } from "@/components/AssessmentQuiz";
 import { AssessmentResults } from "@/components/AssessmentResults";
 import { GradeResult } from "@/components/GradeResult";
@@ -16,6 +16,7 @@ import { LockedError, api } from "@/lib/api";
 import { completeNodeIds, incompletePrereqLabels } from "@/lib/status";
 import type { GradeResult as GradeResultT, SessionResponse } from "@/lib/types";
 import { useUser } from "@/lib/useUser";
+import { completeDraftAttempt, newRequestId } from "@/lib/useDraft";
 
 export default function SessionPage() {
   const { userId, ready } = useUser();
@@ -24,6 +25,7 @@ export default function SessionPage() {
   const qc = useQueryClient();
   const [lockMsg, setLockMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [recoverableAttempt, setRecoverableAttempt] = useState<{ nodeId: string; attemptId: string } | null>(null);
   // Only set when a grade response actually grew the graph — drives the SkillGraph camera cue so an
   // off-screen rewire (learner scrolled down at the editor) doesn't go unnoticed.
   const [rewireFocusIds, setRewireFocusIds] = useState<string[] | undefined>(undefined);
@@ -51,6 +53,16 @@ export default function SessionPage() {
   // Both mutations return the full, server-updated learning_session; write it straight into the
   // cache so the graph re-colors and any remedial node appears without a refetch.
   const writeBack = (res: SessionResponse) => qc.setQueryData(key, res);
+  const practiceRequest = useRef<{ node: string; revision?: string; id: string } | null>(null);
+  const practice = useMutation({
+    mutationFn: (node: string) => {
+      const revision = sessionQ.data?.learning_session.lessons[node]?.exercise?.revision;
+      if (practiceRequest.current?.node !== node || practiceRequest.current.revision !== revision) practiceRequest.current = { node, revision, id: newRequestId() };
+      return api.newPractice(userId!, sessionId, node, revision, practiceRequest.current.id);
+    },
+    onSuccess: res => { writeBack(res); practiceRequest.current = null; setRecoverableAttempt(null); setErrorMsg(null); setGradeOutcome(null); setLiveMessage("New practice ready. Your previous draft is available to restore."); },
+    onError: e => setErrorMsg(e.message),
+  });
 
   const open = useMutation({
     mutationFn: (nodeId: string) => api.openLesson(userId!, sessionId, nodeId),
@@ -68,12 +80,16 @@ export default function SessionPage() {
   });
 
   const grade = useMutation({
-    mutationFn: ({ nodeId, solution }: { nodeId: string; solution: string }) =>
-      api.grade(userId!, sessionId, nodeId, solution, sessionQ.data?.learning_session.lessons[nodeId]?.exercise?.revision),
+    mutationFn: ({ nodeId, solution, attemptId }: { nodeId: string; solution: string; attemptId: string }) =>
+      api.grade(userId!, sessionId, nodeId, solution, sessionQ.data?.learning_session.lessons[nodeId]?.exercise?.revision, attemptId),
     onSuccess: (res, vars) => {
       writeBack(res);
       setErrorMsg(null);
+      setRecoverableAttempt(null);
       if (res.grade_result) {
+        if (res.grade_result.status !== "pending") {
+          completeDraftAttempt(`${userId}:session:${sessionId}:${vars.nodeId}`, sessionQ.data?.learning_session.lessons[vars.nodeId]?.exercise?.revision ?? "legacy");
+        }
         setGradeOutcome({
           nodeId: vars.nodeId,
           result: res.grade_result,
@@ -84,20 +100,41 @@ export default function SessionPage() {
       if (res.grade_result?.harness_error) {
         setLiveMessage("Not graded — the auto-grading tests for this exercise are broken. Your progress is unchanged.");
       } else if (res.grade_result) {
-        const score = Math.round(res.grade_result.score ?? 0);
+        const score = res.grade_result.score == null ? null : Math.round(res.grade_result.score);
         const grew = res.new_node_ids?.length ?? 0;
         setLiveMessage(
-          `Graded: ${score}%.${
+          `${score == null ? "Assessment returned no score" : `Graded: ${score}%.`}${
             grew ? ` ${grew} new prerequisite ${grew === 1 ? "skill" : "skills"} added to the map.` : ""
           }`,
         );
       }
     },
+    onError: async (e, vars) => {
+      setErrorMsg(e.message);
+      try {
+        const saved = await api.getAttempt(userId!, vars.attemptId);
+        if (saved.status !== "pending" && !saved.applied) setRecoverableAttempt({ nodeId: vars.nodeId, attemptId: vars.attemptId });
+      } catch { /* The original error and saved draft remain available for retry. */ }
+    },
+  });
+
+  const recover = useMutation({
+    mutationFn: ({ nodeId, attemptId }: { nodeId: string; attemptId: string }) => api.applyAttempt(userId!, sessionId, nodeId, attemptId),
+    onSuccess: (res, vars) => {
+      writeBack(res);
+      setRecoverableAttempt(null);
+      setErrorMsg(null);
+      if (res.grade_result) {
+        completeDraftAttempt(`${userId}:session:${sessionId}:${vars.nodeId}`, sessionQ.data?.learning_session.lessons[vars.nodeId]?.exercise?.revision ?? "legacy");
+        setGradeOutcome({ nodeId: vars.nodeId, result: res.grade_result, newNodeCount: res.new_node_ids?.length ?? 0 });
+      }
+      setLiveMessage("Saved assessment recovered.");
+    },
     onError: (e) => setErrorMsg(e.message),
   });
 
   const assess = useMutation({
-    mutationFn: (answers: number[]) => api.gradeAssessment(userId!, sessionId, answers),
+    mutationFn: ({ answers, action }: { answers?: number[]; action: "submit" | "skip" | "resume" }) => api.gradeAssessment(userId!, sessionId, answers, action, sessionQ.data?.learning_session.assessment?.quiz_revision),
     onSuccess: (res) => {
       writeBack(res);
       if (res.learning_session.assessment?.results) {
@@ -124,7 +161,7 @@ export default function SessionPage() {
   const total = session.skill_graph.nodes.length;
   const complete = completeNodeIds(session.skill_graph, session.node_state).size;
   const selected = session.selected_node;
-  const pendingAssessment = !!session.assessment && !session.assessment.submitted;
+  const pendingAssessment = !!session.assessment && (session.assessment.status === "pending" || (!session.assessment.status && !session.assessment.submitted));
 
   return (
     <main className="mx-auto max-w-7xl px-6 py-10 md:px-10">
@@ -157,6 +194,7 @@ export default function SessionPage() {
           path is still completable), so the learner has to be told the plan may have a hole — but
           only when the verdict is explicitly false; null/absent means "no verdict", not "failed". */}
       {session.assessment?.submitted && session.assessment.results && <button className="accent-ring mt-4 rounded-lg border px-4 py-2" onClick={() => setShowResults(true)}>Review assessment</button>}
+      {session.assessment?.status === "skipped" && <div className="mt-5 rounded-xl border border-white/10 p-4"><p className="font-medium">Diagnostic skipped</p><p className="mt-1 text-sm text-text-muted">No diagnostic score was recorded. You can continue on the roadmap or take it now.</p><button className="accent-ring mt-3 rounded-lg border px-4 py-2 text-sm" disabled={assess.isPending} onClick={() => assess.mutate({ action: "resume" })}>{assess.isPending ? "Resuming…" : "Take diagnostic now"}</button></div>}
       {session.review_passed === false && <ReviewCaveat notes={session.review_notes} />}
       <EvidenceSources evidence={session.grounding} />
 
@@ -175,11 +213,11 @@ export default function SessionPage() {
             submitting={assess.isPending}
             onSubmit={(answers) => {
               setErrorMsg(null);
-              assess.mutate(answers);
+              assess.mutate({ answers, action: "submit" });
             }}
             onSkip={() => {
               setErrorMsg(null);
-              assess.mutate(session.assessment!.quiz.questions.map(() => -1));
+              assess.mutate({ action: "skip" });
             }}
           />
         </section>
@@ -229,6 +267,7 @@ export default function SessionPage() {
           </p>
         )}
         {errorMsg && <button className="accent-ring mt-2 rounded-lg border px-4 py-2" onClick={() => { void sessionQ.refetch(); setErrorMsg(null); }}>Reload saved progress</button>}
+        {recoverableAttempt && <button className="accent-ring ml-2 mt-2 rounded-lg border px-4 py-2" disabled={recover.isPending} onClick={() => recover.mutate(recoverableAttempt)}>{recover.isPending ? "Recovering assessment…" : "Recover saved assessment"}</button>}
         {open.isPending && (
           <p className="mt-3 flex items-center gap-2 text-sm text-text-muted">
             <span className="lesson-skeleton-spinner" />
@@ -247,16 +286,21 @@ export default function SessionPage() {
             label={session.skill_graph.nodes.find((n) => n.id === gradeOutcome.nodeId)?.label}
             locked={!!session.node_state[gradeOutcome.nodeId]?.remediation_pending}
             weaknesses={session.node_state[gradeOutcome.nodeId]?.weaknesses ?? []}
+            onOpenExercise={() => open.mutate(gradeOutcome.nodeId)}
           />
         ) : selected && session.lessons[selected] ? (
           <LessonPanel
             key={`${selected}:${session.lessons[selected]?.exercise?.revision ?? "legacy"}`}
             session={session}
             nodeId={selected}
+            draftScope={`${userId}:session:${sessionId}:${selected}`}
+            runBasePath={`/sessions/${encodeURIComponent(userId!)}/${encodeURIComponent(sessionId)}/run?node_id=${encodeURIComponent(selected)}`}
             grading={grade.isPending}
-            onGrade={(solution) => grade.mutate({ nodeId: selected, solution })}
+            onGrade={(solution, attemptId) => grade.mutate({ nodeId: selected, solution, attemptId })}
             onFlag={() => flag.mutate(selected)}
             flagging={flag.isPending}
+            onNewPractice={() => practice.mutate(selected)}
+            preparingPractice={practice.isPending}
           />
         ) : (
           <div className="surface flex min-h-[160px] items-center justify-center p-8 text-center text-text-muted">
@@ -334,23 +378,27 @@ function GradedOutcome({
   label,
   locked,
   weaknesses,
+  onOpenExercise,
 }: {
   outcome: { result: GradeResultT; newNodeCount: number };
   label?: string;
   locked: boolean;
   weaknesses: string[];
+  onOpenExercise: () => void;
 }) {
-  const score = Math.round(outcome.result.score ?? 0);
-  const mastered = !outcome.result.harness_error && score >= 80;
+  const scored = !outcome.result.harness_error && (outcome.result.status == null || outcome.result.status === "graded") && outcome.result.score != null;
+  const mastered = scored && outcome.result.mastery_eligible !== false && outcome.result.score! >= 80;
 
   return (
     <article className="surface p-7 md:p-10">
       <p className="eyebrow mb-4">
-        {outcome.result.harness_error ? "Not graded" : "Graded"}
+        {scored ? "Graded" : "Assessment feedback"}
         {label ? ` — ${label}` : ""}
       </p>
 
       <GradeResult result={outcome.result} />
+
+      <button type="button" onClick={onOpenExercise} className="accent-ring mt-4 rounded-lg border px-4 py-2 text-sm">Return to saved exercise{["pending", "retryable_error", "platform_error"].includes(outcome.result.status ?? "") ? " to retry" : ""}</button>
 
       {weaknesses.length > 0 && (
         <div className="mt-6">
@@ -364,7 +412,9 @@ function GradedOutcome({
       )}
 
       <div className="mt-6 border-t border-white/5 pt-5 text-sm text-text-muted">
-        {mastered ? (
+        {!scored ? (
+          <p>Your progress is unchanged. Return to your saved exercise to review your response or retry assessment.</p>
+        ) : mastered ? (
           <p className="font-medium" style={{ color: "var(--color-mastered)" }}>
             Awesome work! You've mastered this skill. Pick the next available skill on the map to continue your path.
           </p>
@@ -380,7 +430,7 @@ function GradedOutcome({
           </p>
         ) : (
           <p>
-            Reopen this skill on the map above for a new lesson aimed at the gaps.
+            Return to the saved exercise and use the feedback to improve your response.
             {outcome.newNodeCount > 0
               ? ` ${outcome.newNodeCount} new ${
                   outcome.newNodeCount === 1 ? "skill was" : "skills were"

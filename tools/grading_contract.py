@@ -5,15 +5,23 @@ import sqlite3
 from contextlib import closing
 
 
+def language_identity(value, default=None):
+    """Canonical display identity; unknown languages retain their declared name."""
+    value = default if value is None or value == "" else value
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("Coding language must be text")
+    value = value.strip().lower()
+    return {"py": "python", "js": "javascript", "node": "javascript", "nodejs": "javascript",
+            "node.js": "javascript", "ts": "typescript", "sqlite": "sql", "sqlite3": "sql",
+            "c++": "cpp", "c#": "csharp", "postgres": "postgresql", "golang": "go"}.get(value, value)
+
+
 def normalize_language(value, default="python"):
     """Only an absent language uses the legacy default."""
-    if value is None or value == "":
-        value = default
-    aliases = {"python": "python", "py": "python", "javascript": "javascript", "js": "javascript",
-               "node": "javascript", "nodejs": "javascript", "node.js": "javascript",
-               "sql": "sql", "sqlite": "sql", "sqlite3": "sql"}
-    normalized = aliases.get(value.strip().lower()) if isinstance(value, str) else None
-    if normalized is None:
+    normalized = language_identity(value, default)
+    if normalized not in {"python", "javascript", "sql"}:
         raise ValueError(f"Unsupported coding language: {value!r}")
     return normalized
 

@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import uuid
 from typing import Optional
@@ -22,6 +23,7 @@ from services.completion import (
     prereqs_by_node,
 )
 from services.learner_profile import make_profile, with_profile
+from services.grading_results import eligible_score, normalize_grade_result
 from services.cost import TokenMeter
 from services.events import STAGES, has_event, record_event
 from services.timing import collect, span, spans_payload
@@ -218,9 +220,33 @@ def _run_assessment(skill_graph: dict, learner_profile: Optional[dict] = None) -
     if quiz is None or not quiz.questions:
         return None
     data = quiz.model_dump()
+    try:
+        _validate_quiz(data, skill_graph)
+    except ValueError:
+        logger.warning("service: invalid diagnostic omitted")
+        return None
     for index, question in enumerate(data["questions"]):
         question["id"] = f"q{index + 1}"
-    return {"quiz": data, "submitted": False}
+    return {"quiz": data, "submitted": False, "status": "pending", "revision": uuid.uuid4().hex}
+
+
+def _validate_quiz(quiz: dict, graph: dict) -> None:
+    nodes = {n["id"] for n in graph.get("nodes", [])}
+    skills, prompts, identifiers = set(), set(), set()
+    questions = quiz.get("questions", [])
+    if not questions:
+        raise ValueError("The diagnostic has no questions.")
+    for q in questions:
+        node = q.get("node_id")
+        prompt = re.sub(r"\s+", " ", str(q.get("question", "")).strip().lower())
+        identifier = q.get("id")
+        if node not in nodes or node in skills or not prompt or prompt in prompts or (identifier and identifier in identifiers):
+            raise ValueError("Diagnostic questions must map uniquely to real roadmap skills.")
+        options = q.get("options", [])
+        key = q.get("correct_index")
+        if not isinstance(options, list) or len(options) < 2 or type(key) is not int or not 0 <= key < len(options):
+            raise ValueError("The diagnostic contains an invalid answer key.")
+        skills.add(node); prompts.add(prompt); identifiers.add(identifier)
 
 
 class LockedNodeError(Exception):
@@ -337,9 +363,14 @@ def _route_final_state(final_state: dict, format_type: str, timing: Optional[dic
     elif route == "EXERCISE":
         if final_state.get("exercise_statement"):
             out["exercise"] = {
+                "id": uuid.uuid4().hex,
+                "revision": uuid.uuid4().hex,
+                "origin": "generated",
                 "format": final_state.get("exercise_format"),
+                "language": final_state.get("exercise_language"),
                 "statement": final_state.get("exercise_statement"),
                 "grading_artifact": final_state.get("grading_artifact"),
+                "grounding": final_state.get("grounding"),
             }
     out["grounding"] = final_state.get("grounding")
     return out
@@ -444,24 +475,56 @@ def _repair_missing_grading_artifact(ls: dict, node_id: str) -> None:
             or not exercise.get("statement")):
         return
 
+    fingerprint = hashlib.sha256(json.dumps({"statement": exercise.get("statement"),
+        "revision": exercise.get("revision"), "language": exercise.get("language"),
+        "evaluator_revision": exercise.get("evaluator_revision", "1"),
+        "profile_revision": exercise.get("profile_revision", "1")}, sort_keys=True).encode()).hexdigest()
+    repairs = exercise.setdefault("repair_state", {})
+    if repairs.get("fingerprint") == fingerprint and repairs.get("attempts", 0) >= 1:
+        return
+    from services.grading_gateway import reserve_repair
+    if not reserve_repair(node_id, fingerprint):
+        exercise["repair_state"] = {"fingerprint": fingerprint, "attempts": 1, "status": "reserved_or_exhausted"}
+        return
+    exercise["repair_state"] = {"fingerprint": fingerprint, "attempts": 1, "status": "attempted"}
+
     from agents.exercise.grader_agent import GraderAgent
+    from services.grading_gateway import capabilities
+    from tools.runtime_profiles import PROFILES, execution_contract
 
     logger.info("service: rebuilding missing grading harness for node %s", node_id)
     meter = TokenMeter()
     try:
+        options = {}
+        if os.getenv('MINDMORPH_TRUSTED_LOCAL_GRADING') != '1' or exercise.get('origin') == 'generated':
+            # Ordinary recovery never validates generated code on the API host.
+            # Old function/module tasks retain their requirements through formative
+            # review; learners can explicitly request a fresh verified task.
+            language = exercise.get('language') or 'python'
+            profile_id = exercise.get('execution_profile') or {'python': 'python-core', 'javascript': 'javascript-node', 'typescript': 'typescript-node', 'sql': 'sqlite'}.get(language, language)
+            capability = capabilities().get(profile_id, {})
+            decision = {}
+            if exercise.get('origin') == 'generated' and capability.get('available') and profile_id in PROFILES:
+                decision = {'profile_id': profile_id, 'revision': capability['revision'], 'entrypoint': PROFILES[profile_id].entrypoint,
+                    'packages': capability.get('packages', []), 'contract': execution_contract(profile_id)}
+            options['execution_capability'] = decision
         artifact = GraderAgent(push_to_langsmith=False).build_grading_artifact(
             with_profile(ls.get("summary") or "Practice this skill", ls.get("learner_profile")),
             exercise["format"],
             exercise["statement"],
             exercise_language=exercise.get("language"),
             callbacks=[meter],
+            **options,
         )
         if artifact is not None:
             exercise["grading_artifact"] = artifact.model_dump()
+            exercise["repair_state"]["status"] = "repaired"
     except Exception:
         # A failed retry must still leave the submission ungraded, with no mastery changes.
         logger.exception("service: grading harness repair failed for node %s", node_id)
     finally:
+        if exercise["repair_state"]["status"] == "attempted":
+            exercise["repair_state"]["status"] = "unavailable"
         repair_usage = meter.totals()
         lesson["grading_repair_usage"] = repair_usage
         usage = ls.setdefault("usage", _empty_usage())
@@ -519,6 +582,7 @@ def open_lesson(ls: dict, node_id: str, user_id: Optional[str] = None) -> dict:
             "grounding": out.get("grounding"),
             "exercise": {
                 "revision": uuid.uuid4().hex,
+                "origin": "generated",
                 "format": out.get("exercise_format"),
                 "language": out.get("exercise_language"),
                 "statement": out.get("exercise_statement"),
@@ -548,6 +612,33 @@ def open_lesson(ls: dict, node_id: str, user_id: Optional[str] = None) -> dict:
 
 
 @private_generation
+def new_practice(ls: dict, node_id: str, user_id: str) -> dict:
+    """Generate a new task for saved teaching without replacing content or progress."""
+    from graph.exercise_graph import build_exercise_graph
+    import uuid
+    node = next((n for n in ls['skill_graph']['nodes'] if n['id'] == node_id), None)
+    lesson = ls.get('lessons', {}).get(node_id)
+    if node is None or not lesson or not lesson.get('content'):
+        raise ValueError('Open this lesson before requesting another practice task.')
+    if node_id in locked_node_ids(ls['skill_graph'], ls['node_state']):
+        raise LockedNodeError(node_id, incomplete_prereq_labels(ls['skill_graph'], ls['node_state'], node_id))
+    profile = ls.get('learner_profile') or make_profile(ls.get('preferences'), ls.get('primary_language'),
+        ls.get('scope'), ls.get('domain'), ls.get('public_query') or ls.get('summary') or '')
+    out = _run_async(build_exercise_graph().ainvoke({
+        'user_query': node.get('label', '') + ': ' + node.get('description', ''),
+        'learner_profile': profile, 'primary_language': ls.get('primary_language') or profile.get('primary_language'),
+        'user_id': user_id, 'public_query': ls.get('public_query'),
+        'grounding': lesson.get('grounding'), 'lesson_content': lesson['content'],
+    }))
+    if not out.get('exercise_statement') or not out.get('grading_artifact'):
+        raise ValueError('A new assessable task could not be prepared. Your saved exercise is unchanged.')
+    return {'id': uuid.uuid4().hex, 'revision': uuid.uuid4().hex, 'origin': 'generated',
+        'format': out.get('exercise_format'), 'language': out.get('exercise_language'),
+        'statement': out['exercise_statement'], 'grading_artifact': out['grading_artifact'],
+        'grounding': out.get('grounding')}
+
+
+@private_generation
 def adapt_after_grade(ls: dict, node_id: str) -> list[str]:
     """Phase 3 — close the loop: a graded node mutates the graph (remedial nodes / unlock edges) and,
     on a low score, invalidates the cached lesson so the next open regenerates against the gaps.
@@ -564,7 +655,9 @@ def adapt_after_grade(ls: dict, node_id: str) -> list[str]:
         return []
 
     result = state.get("last_feedback") or {}
-    score = float(result.get("score", 0.0) or 0.0)
+    score = eligible_score(result)
+    if score is None:
+        return []
     feedback = feedback_text(result)
 
     # Remediation (needs_review) gets bounded retries so the remedial prerequisites are near-certain to
@@ -602,7 +695,8 @@ def adapt_after_grade(ls: dict, node_id: str) -> list[str]:
 
 
 @private_generation
-def grade(ls: dict, node_id: str, solution: str, exercise_revision: Optional[str] = None) -> tuple[dict, list[str], dict | None]:
+def grade(ls: dict, node_id: str, solution: str, exercise_revision: Optional[str] = None,
+          *, adjudicated_result: dict | None = None) -> tuple[dict, list[str], dict | None]:
     """Grade a node's exercise submission, capture mastery, and run adaptation.
 
     Pulls the format + grading artifact from the cached lesson, so the caller passes only the raw
@@ -624,7 +718,8 @@ def grade(ls: dict, node_id: str, solution: str, exercise_revision: Optional[str
     if exercise.get("revision") is not None and exercise_revision != exercise["revision"]:
         raise StaleExerciseError("This exercise has changed. Reload the lesson before submitting again.")
     fmt = exercise.get("format") or "coding_challenge"
-    _repair_missing_grading_artifact(ls, node_id)
+    if adjudicated_result is None:
+        _repair_missing_grading_artifact(ls, node_id)
     artifact = exercise.get("grading_artifact") or {}
 
     from agents.exercise.grader_agent import grade_submission
@@ -642,8 +737,9 @@ def grade(ls: dict, node_id: str, solution: str, exercise_revision: Optional[str
             grade_kwargs = {}
             if exercise.get("language"):
                 grade_kwargs["expected_language"] = exercise["language"]
-            result = grade_submission(fmt, solution, artifact, **grade_kwargs)
-        if result is not None and result.get("harness_error"):
+            result = adjudicated_result if adjudicated_result is not None else grade_submission(fmt, solution, artifact, **grade_kwargs)
+        result = normalize_grade_result(result, method=(result or {}).get("method", "execution" if fmt == "coding_challenge" else "rubric"))
+        if result.get("harness_error"):
             # The generated grading harness is broken — the learner's submission was never actually
             # measured. Log loudly and record it as a GRADE failure, not an exercise result: no
             # score, no mastery update, no adaptation, no remedial nodes. (apply_score refuses these
@@ -653,9 +749,9 @@ def grade(ls: dict, node_id: str, solution: str, exercise_revision: Optional[str
                 "NOT a learner failure: %s", node_id, result.get("failures"),
             )
             record_event(ls, STAGES.GRADE_FAILURE, node_id=node_id, error="harness_error")
-        elif result is not None:
+        elif eligible_score(result) is not None:
             apply_score(ls, node_id, fmt, result)
-            score = float(result.get("score", 0.0) or 0.0)
+            score = eligible_score(result)
             record_event(ls, STAGES.EXERCISE_GRADED, node_id=node_id, score=score,
                          passed=bool(result.get("passed")))
             # Read the graded node's status BEFORE adapt_after_grade — adaptation only adds new
@@ -679,7 +775,7 @@ def grade(ls: dict, node_id: str, solution: str, exercise_revision: Optional[str
     return ls, new_node_ids, result
 
 
-def grade_assessment(ls: dict, answers: list[int]) -> dict:
+def grade_assessment(ls: dict, answers: list[int] | None = None, *, action: str = "submit", quiz_revision: str | None = None) -> dict:
     """Grade the onboarding MCQ quiz; each correct answer gives that node a head-start. Returns ls.
 
     A correct answer marks the node ``in_progress`` (``ASSESSMENT_PASS_SCORE``), NOT ``mastered`` — one MCQ
@@ -692,6 +788,16 @@ def grade_assessment(ls: dict, answers: list[int]) -> dict:
         raise ValueError("No assessment quiz on this session.")
     if assessment.get("submitted"):
         return ls  # retries, double-clicks and later replays cannot change earned progress
+    if quiz_revision is not None and quiz_revision != assessment.get("revision"):
+        raise StaleExerciseError("This diagnostic has changed. Reload before submitting.")
+    if action in {"skip", "resume"}:
+        assessment["status"] = "skipped" if action == "skip" else "pending"
+        assessment["submitted"] = False
+        return ls
+    if action != "submit":
+        raise ValueError("Unknown diagnostic action.")
+    _validate_quiz(assessment["quiz"], ls["skill_graph"])
+    answers = answers or []
     questions = assessment["quiz"].get("questions", [])
     if len(answers) != len(questions):
         raise ValueError(f"Expected {len(questions)} answers, got {len(answers)}.")
@@ -732,6 +838,7 @@ def grade_assessment(ls: dict, answers: list[int]) -> dict:
         }
         correct += 1
     assessment["submitted"] = True
+    assessment["status"] = "submitted"
     assessment["results"] = results
     record_event(ls, STAGES.ASSESSMENT_SUBMITTED, total=len(questions), correct=correct)
     return ls

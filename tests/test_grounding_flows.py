@@ -4,7 +4,7 @@ from copy import deepcopy
 from unittest.mock import AsyncMock, Mock, MagicMock
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.api_client import AuthenticatedClient as TestClient
 
 import services.learning_service as service
 from rag.grounding import Evidence, Passage

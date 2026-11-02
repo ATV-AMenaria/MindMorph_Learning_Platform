@@ -28,7 +28,24 @@ export function GradeResult({ result }: { result: GradeResultT }) {
     );
   }
 
-  const score = Math.round(result.score ?? 0);
+  const status = result.status ?? "graded";
+  if (status === "pending" || status === "retryable_error" || status === "platform_error" || status === "needs_evidence" || status === "invalid_submission" || status === "feedback_only") {
+    const title: Record<string, string> = {
+      pending: "Assessment is still processing",
+      retryable_error: "Assessment could not finish",
+      platform_error: "Assessment service is unavailable",
+      needs_evidence: "There is not enough evidence to score this yet",
+      invalid_submission: "This submission could not be assessed",
+      feedback_only: "Feedback only — no mastery score",
+    };
+    return <div className="mt-5 rounded-xl border border-white/10 bg-ink-850 p-4"><p className="font-semibold text-text-strong">{title[status]}</p>{result.feedback && <p className="mt-2 text-sm text-text">{result.feedback}</p>}{result.message && <p className="mt-2 text-sm text-text-muted">{result.message}</p>}{result.mastery_eligible === false && <p className="mt-2 text-xs text-text-muted">This result does not change skill progress.</p>}</div>;
+  }
+
+  if (result.score == null) {
+    return <div className="mt-5 rounded-xl border border-white/10 bg-ink-850 p-4"><p className="font-semibold text-text-strong">No numeric score was returned</p>{result.feedback && <p className="mt-2 text-sm text-text">{result.feedback}</p>}{result.message && <p className="mt-2 text-sm text-text-muted">{result.message}</p>}</div>;
+  }
+
+  const score = Math.round(result.score);
   const isCoding = result.passed != null && result.total != null;
   const passed = isCoding && result.passed === result.total && (result.total ?? 0) > 0;
   const tone = passed || score >= 80 ? "var(--color-mastered)" : score >= 50 ? "var(--color-progress)" : "var(--color-review)";

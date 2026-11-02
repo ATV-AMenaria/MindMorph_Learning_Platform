@@ -79,7 +79,10 @@ def migration_matrix():
                                    ("legacy", "legacy.pdf", "SQL joins legacy text", vector))
         run([sys.executable, "-m", "alembic", "upgrade", "head"], env=env, log=f"migration-{name}-upgrade.txt")
         with psycopg.connect(dsn) as connection:
-            assert connection.execute("SELECT version_num FROM alembic_version").fetchall() == [("0005_grounding_provenance",)]
+            from alembic.config import Config
+            from alembic.script import ScriptDirectory
+            head = ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()
+            assert connection.execute("SELECT version_num FROM alembic_version").fetchall() == [(head,)]
             if revisions:
                 row = connection.execute("SELECT source,content,source_id,page FROM rag_chunks").fetchone()
                 assert row == ("legacy.pdf", "SQL joins legacy text", None, None)

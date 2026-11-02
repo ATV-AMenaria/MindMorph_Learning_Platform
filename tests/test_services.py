@@ -99,7 +99,7 @@ def test_grade_applies_mastery_and_runs_adaptation(monkeypatch):
     }, _usage()))
     # Grade returns a perfect score; adaptation is stubbed (cover the wiring, not the LLM).
     import agents.exercise.grader_agent as grader
-    monkeypatch.setattr(grader, "grade_submission", lambda fmt, sol, art: {"score": 100, "passed": 1, "total": 1})
+    monkeypatch.setattr(grader, "grade_submission", lambda fmt, sol, art: _evidence({"score": 100, "passed": 1, "total": 1}))
     adapt_calls = {"n": 0}
     monkeypatch.setattr(svc, "adapt_after_grade", lambda ls, nid: adapt_calls.__setitem__("n", adapt_calls["n"] + 1))
 
@@ -137,7 +137,7 @@ def _opened(monkeypatch, score):
         "exercise_statement": "s", "grading_artifact": {"format": "coding_challenge", "unit_tests": []},
     }, _usage()))
     import agents.exercise.grader_agent as grader
-    monkeypatch.setattr(grader, "grade_submission", lambda fmt, sol, art: {"score": score})
+    monkeypatch.setattr(grader, "grade_submission", lambda fmt, sol, art: _evidence({"score": score}))
     ls = svc.new_learning_session(_scout_state(), "B")
     svc.open_lesson(ls, "a")
     return ls
@@ -275,7 +275,7 @@ def test_grade_emits_exercise_graded_and_mastered(monkeypatch):
         "exercise_statement": "s", "grading_artifact": {"format": "coding_challenge", "unit_tests": []},
     }, _usage()))
     import agents.exercise.grader_agent as grader
-    monkeypatch.setattr(grader, "grade_submission", lambda fmt, sol, art: {"score": 100, "passed": 1})
+    monkeypatch.setattr(grader, "grade_submission", lambda fmt, sol, art: _evidence({"score": 100, "passed": 1}))
     monkeypatch.setattr(svc, "adapt_after_grade", lambda ls, nid: None)  # isolate event wiring
     ls = svc.new_learning_session(_scout_state(), "B")
     svc.open_lesson(ls, "a")
@@ -316,7 +316,7 @@ def test_path_completed_fires_once(monkeypatch):
         "exercise_statement": "s", "grading_artifact": {"format": "coding_challenge", "unit_tests": []},
     }, _usage()))
     import agents.exercise.grader_agent as grader
-    monkeypatch.setattr(grader, "grade_submission", lambda fmt, sol, art: {"score": 100, "passed": 1})
+    monkeypatch.setattr(grader, "grade_submission", lambda fmt, sol, art: _evidence({"score": 100, "passed": 1}))
     monkeypatch.setattr(svc, "adapt_after_grade", lambda ls, nid: None)
     ls = svc.new_learning_session(one_node, "B")
     svc.open_lesson(ls, "a")
@@ -334,3 +334,10 @@ def test_is_session_complete():
         ls["node_state"][nid]["status"] = "mastered"
         ls["node_state"][nid]["best_score"] = 100
     assert is_session_complete(ls["skill_graph"], ls["node_state"]) is True
+
+
+def _evidence(raw):
+    """Completed check evidence for state/timing tests; not a model total."""
+    score = float(raw["score"])
+    return {**raw, "method": "execution", "passed": round(score * 100), "total": 10000,
+            "failures": [] if score == 100 else ["Fixture learner check failed"]}

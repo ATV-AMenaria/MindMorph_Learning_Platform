@@ -22,6 +22,11 @@ fastembed
 # Material ingestion (P2 #9) — PDF text extraction + multipart upload.
 pymupdf
 python-multipart
+# JWT authentication and per-user rate limits inherited from staging.
+PyJWT
+bcrypt
+slowapi
+email-validator
 # RAG persistence (P2 #9) — pgvector-backed per-user store (opt-in via MINDMORPH_STORE=postgres).
 pgvector
 pytest

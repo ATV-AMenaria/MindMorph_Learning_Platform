@@ -5,7 +5,7 @@ import json
 from unittest.mock import Mock
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.api_client import AuthenticatedClient as TestClient
 
 from api.main import app
 from api import routes
@@ -31,6 +31,7 @@ SQL_ASSERTIONS = [
 
 
 def _session(exercise):
+    exercise.setdefault("statement", "Implement the operation described by this saved practice task.")
     return {
         "skill_graph": {"nodes": [{"id": "a", "label": "Addition"}], "edges": []},
         "node_state": {"a": default_node_state()},
@@ -41,6 +42,7 @@ def _session(exercise):
 
 @pytest.fixture
 def grade_client(monkeypatch):
+    monkeypatch.setenv("MINDMORPH_TRUSTED_LOCAL_GRADING", "1")  # explicit legacy adapter coverage, not isolation proof
     repo = InMemoryLearningSessionRepository()
     monkeypatch.setattr(routes, "get_default_repository", lambda: repo)
     adaptation = Mock(return_value=[])
@@ -92,7 +94,7 @@ def test_ungradable_exercises_do_not_penalize_learner(grade_client, language, ar
     assert response.status_code == 200
     result = response.json()["grade_result"]
     assert result["harness_error"] is True
-    assert "score" not in result
+    assert result.get("score") is None
     saved = repo.get("audit", "session")
     assert saved["node_state"] == before
     assert response.json()["new_node_ids"] == []
@@ -132,7 +134,7 @@ def test_real_wrong_answer_still_triggers_remediation(grade_client):
     ("JS", "coding_challenge", "javascript"),
     ("py", "coding_challenge", "python"),
     ("sqlite", "coding_challenge", "sql"),
-    ("rust", "case_study", None),
+    ("rust", "coding_challenge", "rust"),
 ])
 async def test_exercise_graph_uses_supported_canonical_languages(preferred, expected_format, expected_language):
     from types import SimpleNamespace

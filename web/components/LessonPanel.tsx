@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { AssessmentNotice } from "@/components/AssessmentNotice";
+
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
@@ -11,6 +12,7 @@ import { MermaidDiagram } from "./MermaidDiagram";
 import { Sandbox } from "./Sandbox";
 import { EvidenceSources, citedText } from "./EvidenceSources";
 import type { LearningSession } from "@/lib/types";
+import { useDraft } from "@/lib/useDraft";
 
 // rehype-highlight runs before these component overrides and only colorizes languages it
 // recognizes; `ignoreMissing` makes it skip the ```mermaid fence untouched (no such grammar), so
@@ -34,27 +36,36 @@ export function LessonPanel({
   session,
   nodeId,
   onGrade,
+  draftScope,
+  runBasePath,
   grading,
   onFlag,
   flagging,
+  onNewPractice,
+  preparingPractice,
 }: {
   session: LearningSession;
   nodeId: string;
-  onGrade: (solution: string) => void;
+  onGrade: (solution: string, attemptId: string) => void;
+  draftScope: string;
+  runBasePath: string;
   grading: boolean;
   onFlag?: () => void;
   flagging?: boolean;
+  onNewPractice?: () => void;
+  preparingPractice?: boolean;
 }) {
   const lesson = session.lessons[nodeId];
-  const [solution, setSolution] = useState("");
+  const exercise = lesson?.exercise;
+  const revision = exercise?.revision ?? "legacy";
+  const draft = useDraft(draftScope, revision);
 
   if (!lesson) return null;
-  const exercise = lesson.exercise;
   const isCoding = (exercise?.format ?? "coding_challenge") === "coding_challenge";
   const exerciseLanguage = exercise?.language ?? exercise?.grading_artifact?.language ?? "python";
   const nodeState = session.node_state[nodeId];
   // Only display grade result if the learner has actually submitted a solution attempt
-  const lastFeedback = (nodeState?.attempts ?? 0) > 0 ? (nodeState?.last_feedback ?? null) : null;
+  const lastFeedback = exercise?.last_result ?? ((nodeState?.attempts ?? 0) > 0 ? (nodeState?.last_feedback ?? null) : null);
   // Already flagged? Derived from the funnel timeline so it persists across reloads.
   const flagged = (session.events ?? []).some(
     (e) => e.stage === "content_flagged" && e.node_id === nodeId,
@@ -115,14 +126,16 @@ export function LessonPanel({
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{citedText(exercise.statement, exercise.grounding ?? lesson.grounding)}</ReactMarkdown>
           </div>
           <EvidenceSources evidence={exercise.grounding ?? lesson.grounding} />
+          <AssessmentNotice exercise={exercise} />
+          {onNewPractice && <button type="button" onClick={onNewPractice} disabled={preparingPractice || grading} className="accent-ring mt-3 rounded-lg border border-white/10 px-4 py-2 text-sm text-text-muted disabled:opacity-50">{preparingPractice ? "Preparing new practice…" : "New practice task"}</button>}
 
           <div className="mt-6">
             {isCoding ? (
-              <CodeEditor value={solution} onChange={setSolution} language={exerciseLanguage} />
+              <CodeEditor value={draft.value} onChange={draft.setValue} language={exerciseLanguage} />
             ) : (
               <textarea
-                value={solution}
-                onChange={(e) => setSolution(e.target.value)}
+                value={draft.value}
+                onChange={(e) => draft.setValue(e.target.value)}
                 placeholder="Your solution, response, or analysis…"
                 aria-label="Your response"
                 className="accent-ring h-48 w-full rounded-xl border border-white/10 bg-ink-900 p-4 text-text-strong"
@@ -130,9 +143,12 @@ export function LessonPanel({
             )}
           </div>
 
+          {draft.storageUnavailable && <p role="status" className="mt-2 text-xs text-text-muted">Browser storage is unavailable. Your draft is retained while this page remains open; keep this tab open until you submit.</p>}
+          {draft.previous && <div className="mt-3 flex items-center gap-3 text-sm text-text-muted"><span>A previous exercise draft is saved.</span><button type="button" className="underline" onClick={draft.restorePrevious}>Restore it</button><button type="button" className="underline" onClick={draft.dismissPrevious}>Dismiss</button></div>}
+
           <button
-            onClick={() => onGrade(solution)}
-            disabled={grading || !solution.trim()}
+            onClick={() => onGrade(draft.value, draft.attemptId())}
+            disabled={grading || !draft.value.trim()}
             className="accent-ring mt-5 rounded-xl px-6 py-2.5 font-medium text-ink-900 transition-transform hover:-translate-y-0.5 disabled:opacity-50 disabled:hover:translate-y-0"
             style={{ background: "var(--color-gold)" }}
           >
@@ -141,7 +157,7 @@ export function LessonPanel({
 
           {lastFeedback && <GradeResult result={lastFeedback} />}
 
-          {isCoding && <Sandbox />}
+          {isCoding && <Sandbox language={exerciseLanguage} solution={draft.value} basePath={runBasePath} revision={exercise?.revision} profileId={exercise?.execution_profile} />}
         </section>
       )}
     </article>

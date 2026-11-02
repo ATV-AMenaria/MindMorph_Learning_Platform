@@ -28,6 +28,8 @@ from api.schemas import (
     FollowUpRequest,
     FollowUpResponse,
     GradeRequest,
+    RunRequest,
+    NewPracticeRequest,
     IngestResponse,
     SessionMeta,
     SessionResponse,
@@ -37,6 +39,10 @@ from persistence.repository import get_default_repository
 from persistence.errors import StorageUnavailableError, SessionConflictError
 from services.events import STAGES, funnel_summary, record_event
 from services.generation_privacy import private_generation
+from persistence.grading_store import GradingStore
+from services import grading_gateway as gateway
+from services import practice_runs
+from services.public_projection import public_session, public_result
 from rag.grounding import retrieve_evidence, validate_citations, CitationStream
 from services.learning_service import (
     LockedNodeError,
@@ -55,6 +61,94 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 GEN_FAILED = "The learning service is busy or rate-limited. Please try again in a moment."
+
+
+def _accept_creation(req, repo):
+    if not req.request_id:
+        return None
+    key = "create:" + req.request_id
+    binding = gateway.digest(req.model_dump(exclude={"request_id"}))
+    store = GradingStore(repo)
+    record, _ = store.put_once(req.user_id, key, "creation", {"binding": binding, "state": "accepted"})
+    if record["binding"] != binding:
+        raise HTTPException(409, "This request ID is bound to different learning preferences.")
+    if record.get("state") == "completed":
+        return StartSessionResponse(**record["response"])
+    if record.get("state") == "generated":
+        return _materialize_creation(req, repo, record["result"])
+    record, claimed = store.claim_generation(req.user_id, key)
+    if not claimed:
+        raise HTTPException(409, "This learning request is already being prepared.")
+    req._creation_token = record["lease_token"]
+    return None
+
+
+def _finish_creation(req, repo, result):
+    # Persist generation before materialization. A crash after either this write
+    # or session.save resumes the same identities without another model call.
+    from persistence.grading_store import clone
+    result = clone(result)
+    ls = result.get("learning_session")
+    if ls is not None:
+        ls.setdefault("graph_identity", uuid.uuid4().hex)
+        for lesson in ls.get("lessons", {}).values():
+            exercise = lesson.get("exercise")
+            if isinstance(exercise, dict):
+                exercise.setdefault("id", uuid.uuid4().hex)
+                exercise.setdefault("revision", uuid.uuid4().hex)
+    if isinstance(result.get("exercise"), dict):
+        result["exercise"].setdefault("id", uuid.uuid4().hex)
+        result["exercise"].setdefault("revision", uuid.uuid4().hex)
+    if req.request_id:
+        store = GradingStore(repo)
+        record = store.update(req.user_id, "create:" + req.request_id,
+            {"state": "generated", "result": result}, expected_status="accepted", expected_token=req._creation_token)
+        if record.get("state") == "completed":
+            return StartSessionResponse(**record["response"])
+        if record.get("state") != "generated":
+            raise SessionConflictError("This learning request was recovered by another worker. Retry the same request.")
+        result = record["result"]
+    return _materialize_creation(req, repo, result)
+
+
+def _materialize_creation(req, repo, result):
+    from persistence.grading_store import clone
+    result = clone(result)
+    ls = result.get("learning_session")
+    session_id = None
+    if ls is not None:
+        session_id = ls.get("graph_identity") or uuid.uuid4().hex
+        ls["session_id"] = session_id
+        ls["user_id"] = req.user_id
+        saved = repo.get(req.user_id, session_id)
+        if saved is None:
+            gateway.synchronize_session(repo, req.user_id, session_id, ls)
+            try:
+                repo.save(req.user_id, session_id, ls, title=req.query)
+            except SessionConflictError:
+                saved = repo.get(req.user_id, session_id)
+                if saved is None:
+                    raise
+        # A retry cannot replace learner updates made after the first save.
+        if saved is not None:
+            ls = saved
+    exercise = result.get("exercise")
+    if exercise:
+        exercise = gateway.save_standalone(repo, req.user_id, exercise)
+    response = StartSessionResponse(route=result["route"], session_id=session_id,
+        learning_session=ls, final_content=result.get("final_content"), exercise=exercise,
+        grounding=result.get("grounding"))
+    if req.request_id:
+        record = GradingStore(repo).update(req.user_id, "create:" + req.request_id,
+            {"state": "completed", "response": response.model_dump()}, expected_status="generated")
+        return StartSessionResponse(**record["response"])
+    return response
+
+
+def _creation_failed(req, repo):
+    if req.request_id:
+        GradingStore(repo).update(req.user_id, "create:" + req.request_id,
+            {"state": "retryable_error"}, expected_status="accepted", expected_token=req._creation_token)
 
 
 def _service_unavailable(what: str, exc: Exception) -> HTTPException:
@@ -100,9 +194,13 @@ def get_followup_questions(request: Request, req: FollowUpRequest) -> FollowUpRe
 @router.post("/sessions", response_model=StartSessionResponse)
 @limiter.limit("10/minute")
 def create_session(request: Request, req: CreateSessionRequest) -> StartSessionResponse:
-    """Run orchestration for a query. Scoped strictly to the authenticated user."""
-    authed_user_id = _get_authed_user_id(request, req.user_id)
-    extra = {"user_id": authed_user_id}
+    """Run orchestration for a query. Only the SCOUT route yields a persisted learning_session."""
+    req.user_id = _get_authed_user_id(request, req.user_id)
+    repo = get_default_repository()
+    replay = _accept_creation(req, repo)
+    if replay:
+        return replay
+    extra = {"user_id": req.user_id}
     if req.preferences is not None:
         extra["preferences"] = req.preferences
     if req.primary_language is not None:
@@ -114,23 +212,13 @@ def create_session(request: Request, req: CreateSessionRequest) -> StartSessionR
 
     try:
         result = start_session(req.query, req.format_type, **extra)
+        return _finish_creation(req, repo, result)
+    except (StorageUnavailableError, SessionConflictError):
+        _creation_failed(req, repo)
+        raise
     except Exception as e:
+        _creation_failed(req, repo)
         raise _service_unavailable("start_session", e)
-    resp = StartSessionResponse(
-        route=result["route"],
-        final_content=result.get("final_content"),
-        exercise=result.get("exercise"),
-        grounding=result.get("grounding"),
-    )
-    ls = result.get("learning_session")
-    if ls is not None:
-        session_id = ls.get("graph_identity") or uuid.uuid4().hex
-        ls["session_id"] = session_id
-        ls["user_id"] = authed_user_id
-        get_default_repository().save(authed_user_id, session_id, ls, title=req.query)
-        resp.session_id = session_id
-        resp.learning_session = ls
-    return resp
 
 
 @router.post("/sessions/stream")
@@ -138,8 +226,11 @@ def create_session(request: Request, req: CreateSessionRequest) -> StartSessionR
 async def create_session_stream(request: Request, req: CreateSessionRequest) -> StreamingResponse:
     """Streaming twin of POST /sessions: SSE progress with verified user identity."""
     authed_user_id = _get_authed_user_id(request, req.user_id)
+    req.user_id = authed_user_id
 
-    extra = {"user_id": authed_user_id}
+    repo = get_default_repository()
+    replay = await asyncio.to_thread(_accept_creation, req, repo)
+    extra = {"user_id": req.user_id}
     if req.preferences is not None:
         extra["preferences"] = req.preferences
     if req.primary_language is not None:
@@ -150,30 +241,25 @@ async def create_session_stream(request: Request, req: CreateSessionRequest) -> 
         extra["domain"] = req.domain
 
     async def gen():
+        if replay:
+            yield _sse({"done": True, "session": replay.model_dump()})
+            return
         try:
             async for evt in astream_session(req.query, req.format_type, **extra):
                 if "result" not in evt:
                     yield _sse({"stage": evt["stage"], "label": evt["label"]})
                     continue
                 result = evt["result"]
-                resp = StartSessionResponse(
-                    route=result["route"],
-                    final_content=result.get("final_content"),
-                    exercise=result.get("exercise"),
-                    grounding=result.get("grounding"),
-                )
-                ls = result.get("learning_session")
-                if ls is not None:
-                    session_id = ls.get("graph_identity") or uuid.uuid4().hex
-                    ls["session_id"] = session_id
-                    ls["user_id"] = authed_user_id
-                    get_default_repository().save(authed_user_id, session_id, ls, title=req.query)
-                    resp.session_id = session_id
-                    resp.learning_session = ls
+                resp = await asyncio.to_thread(_finish_creation, req, repo, result)
                 yield _sse({"done": True, "session": resp.model_dump()})
         except (StorageUnavailableError, SessionConflictError) as exc:
+            _creation_failed(req, repo)
             yield _sse({"error": str(exc)})
+        except asyncio.CancelledError:
+            _creation_failed(req, repo)
+            raise
         except Exception:
+            _creation_failed(req, repo)
             logger.error("api: create_session_stream failed")
             yield _sse({"error": GEN_FAILED})
 
@@ -193,7 +279,7 @@ def get_session(request: Request, user_id: str, session_id: str) -> SessionRespo
     authed_user_id = _get_authed_user_id(request, user_id)
     repo = get_default_repository()
     ls = _load_or_404(repo, authed_user_id, session_id, target_user_id=user_id)
-    return SessionResponse(session_id=session_id, learning_session=ls)
+    return SessionResponse(session_id=session_id, learning_session=gateway.with_attempt_history(repo, user_id, session_id, ls))
 
 
 @router.post("/sessions/{user_id}/{session_id}/lessons/{node_id}", response_model=SessionResponse)
@@ -203,17 +289,25 @@ def open_node_lesson(request: Request, user_id: str, session_id: str, node_id: s
     repo = get_default_repository()
     ls = _load_or_404(repo, authed_user_id, session_id, target_user_id=user_id)
     try:
-        ls = open_lesson(ls, node_id, user_id=authed_user_id)
+        gateway.hydrate_session(repo, user_id, ls)
+        with gateway.repair_context(repo, user_id, session_id):
+            ls = open_lesson(ls, node_id, user_id=user_id)
     except LockedNodeError as e:
-        repo.save(authed_user_id, session_id, ls)
+        # Server-side gate: a locked node cannot be opened even by a hand-crafted request.
+        gateway.synchronize_session(repo, user_id, session_id, ls)
+        repo.save(user_id, session_id, ls)  # preserve any recovered remediation before returning the lock
         raise HTTPException(status_code=409, detail={"error": "locked", "pending": e.pending})
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        # Lesson compose is LLM-backed (content + exercise) — transient failure ⇒ 503, not 500.
+        # Record the failed attempt (a funnel/content signal) and persist before surfacing the 503.
         record_event(ls, STAGES.COMPOSE_FAILURE, node_id=node_id, error=type(e).__name__, user_id=authed_user_id)
-        repo.save(authed_user_id, session_id, ls)
+        gateway.synchronize_session(repo, user_id, session_id, ls)
+        repo.save(user_id, session_id, ls)
         raise _service_unavailable("open_lesson", e)
-    repo.save(authed_user_id, session_id, ls)
+    gateway.synchronize_session(repo, user_id, session_id, ls)
+    repo.save(user_id, session_id, ls)
     return SessionResponse(session_id=session_id, learning_session=ls)
 
 
@@ -241,6 +335,29 @@ async def ingest_material(request: Request, user_id: str, file: UploadFile = Fil
     return IngestResponse(filename=name, chunks=chunks)
 
 
+@router.post('/sessions/{user_id}/{session_id}/lessons/{node_id}/practice', response_model=SessionResponse)
+def new_lesson_practice(request: Request, user_id: str, session_id: str, node_id: str, req: NewPracticeRequest):
+    authed_user_id = _get_authed_user_id(request, user_id)
+    if user_id != authed_user_id:
+        raise HTTPException(403, "Forbidden: Cannot access another user's practice")
+    from services.practice_tasks import replace_task, PracticeUnavailableError
+    try:
+        ls = replace_task(get_default_repository(), user_id, session_id, node_id, req.exercise_revision, req.request_id)
+    except KeyError:
+        raise HTTPException(404, 'Session not found')
+    except LockedNodeError as error:
+        raise HTTPException(409, {'error': 'locked', 'pending': error.pending})
+    except PracticeUnavailableError as error:
+        raise HTTPException(503, str(error))
+    except (StorageUnavailableError, SessionConflictError):
+        raise
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+    except Exception as error:
+        raise _service_unavailable('new_practice', error)
+    return SessionResponse(session_id=session_id, learning_session=ls)
+
+
 @router.post("/sessions/{user_id}/{session_id}/assessment", response_model=SessionResponse)
 @limiter.limit("15/minute")
 def grade_session_assessment(
@@ -250,7 +367,7 @@ def grade_session_assessment(
     repo = get_default_repository()
     ls = _load_or_404(repo, authed_user_id, session_id, target_user_id=user_id)
     try:
-        ls = grade_assessment(ls, req.answers)
+        ls = grade_assessment(ls, req.answers, action=req.action, quiz_revision=req.quiz_revision)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -323,28 +440,163 @@ def grade_node(
     authed_user_id = _get_authed_user_id(request, user_id)
     repo = get_default_repository()
     ls = _load_or_404(repo, authed_user_id, session_id, target_user_id=user_id)
+    if req.attempt_id is None:
+        req.attempt_id = "legacy-" + gateway.digest({"session": session_id, "node": node_id,
+            "revision": req.exercise_revision, "solution": req.solution})
     new_node_ids: list[str] = []
     result: dict | None = None
     try:
-        extra = {"exercise_revision": req.exercise_revision} if req.exercise_revision is not None else {}
-        ls, new_node_ids, result = grade(ls, node_id, req.solution, **extra)
+        ls, new_node_ids, result = gateway.grade_lesson(repo, user_id, session_id, node_id,
+            req.solution, req.exercise_revision, req.attempt_id)
     except LockedNodeError as e:
         raise HTTPException(status_code=409, detail={"error": "locked", "pending": e.pending})
     except StaleExerciseError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except (SessionConflictError, StorageUnavailableError):
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        record_event(ls, STAGES.GRADE_FAILURE, node_id=node_id, error=type(e).__name__, user_id=authed_user_id)
-        repo.save(authed_user_id, session_id, ls)
+        # Grading itself is deterministic, but adaptation/regeneration is LLM-backed — guard anyway.
         raise _service_unavailable("grade", e)
-    repo.save(authed_user_id, session_id, ls)
     return SessionResponse(
         session_id=session_id,
         learning_session=ls,
         new_node_ids=new_node_ids,
         grade_result=result,
     )
+
+
+@router.get("/exercises/{user_id}")
+def list_exercises(request: Request, user_id: str):
+    authed_user_id = _get_authed_user_id(request, user_id)
+    if user_id != authed_user_id:
+        raise HTTPException(403, "Forbidden: Cannot access another user's practice")
+    return gateway.list_standalone(get_default_repository(), user_id)
+
+
+@router.get("/capabilities")
+def runtime_capabilities():
+    return gateway.capabilities()
+
+
+def _run_context(repo, user, sid=None, node=None, exercise_id=None):
+    if sid is not None:
+        ls = _load_or_404(repo, user, sid)
+        from services.completion import locked_node_ids
+        if node in locked_node_ids(ls["skill_graph"], ls["node_state"]):
+            raise HTTPException(409, "Complete this skill's prerequisites first.")
+        exercise = (ls.get("lessons", {}).get(node) or {}).get("exercise")
+        context = {"session_id": sid, "node_id": node}
+    else:
+        row = GradingStore(repo).get(user, "exercise:" + exercise_id)
+        exercise = row["exercise"] if row else None
+        context = {"exercise_id": exercise_id}
+    if not exercise:
+        raise HTTPException(404, "Open an existing exercise before running code.")
+    return exercise, context
+
+
+@router.post("/sessions/{user_id}/{session_id}/run")
+def run_lesson(request: Request, user_id: str, session_id: str, node_id: str, req: RunRequest):
+    authed_user_id = _get_authed_user_id(request, user_id)
+    if user_id != authed_user_id:
+        raise HTTPException(403, "Forbidden: Cannot access another user's practice")
+    repo = get_default_repository()
+    exercise, context = _run_context(repo, user_id, session_id, node_id)
+    return practice_runs.run(repo, user_id, exercise, req.solution, req.exercise_revision, req.run_id, context, req.stdin)
+
+
+@router.delete("/sessions/{user_id}/{session_id}/run/{run_id}")
+def cancel_lesson_run(request: Request, user_id: str, session_id: str, run_id: str, node_id: str):
+    authed_user_id = _get_authed_user_id(request, user_id)
+    if user_id != authed_user_id:
+        raise HTTPException(403, "Forbidden: Cannot access another user's practice")
+    try:
+        return practice_runs.cancel(get_default_repository(), user_id, run_id, {"session_id": session_id, "node_id": node_id})
+    except KeyError:
+        raise HTTPException(404, "Run not found")
+
+
+@router.post("/exercises/{user_id}/{exercise_id}/run")
+def run_standalone(request: Request, user_id: str, exercise_id: str, req: RunRequest):
+    authed_user_id = _get_authed_user_id(request, user_id)
+    if user_id != authed_user_id:
+        raise HTTPException(403, "Forbidden: Cannot access another user's practice")
+    repo = get_default_repository()
+    exercise, context = _run_context(repo, user_id, exercise_id=exercise_id)
+    return practice_runs.run(repo, user_id, exercise, req.solution, req.exercise_revision, req.run_id, context, req.stdin)
+
+
+@router.delete("/exercises/{user_id}/{exercise_id}/run/{run_id}")
+def cancel_standalone_run(request: Request, user_id: str, exercise_id: str, run_id: str):
+    authed_user_id = _get_authed_user_id(request, user_id)
+    if user_id != authed_user_id:
+        raise HTTPException(403, "Forbidden: Cannot access another user's practice")
+    try:
+        return practice_runs.cancel(get_default_repository(), user_id, run_id, {"exercise_id": exercise_id})
+    except KeyError:
+        raise HTTPException(404, "Run not found")
+
+
+@router.get("/exercises/{user_id}/{exercise_id}")
+def get_exercise(request: Request, user_id: str, exercise_id: str):
+    authed_user_id = _get_authed_user_id(request, user_id)
+    if user_id != authed_user_id:
+        raise HTTPException(403, "Forbidden: Cannot access another user's practice")
+    result = gateway.get_standalone(get_default_repository(), user_id, exercise_id)
+    if result is None:
+        raise HTTPException(404, "Exercise not found")
+    return result
+
+
+@router.post("/exercises/{user_id}/{exercise_id}/grade")
+def grade_exercise(request: Request, user_id: str, exercise_id: str, req: GradeRequest):
+    authed_user_id = _get_authed_user_id(request, user_id)
+    if user_id != authed_user_id:
+        raise HTTPException(403, "Forbidden: Cannot access another user's practice")
+    repo = get_default_repository()
+    row = GradingStore(repo).get(user_id, "exercise:" + exercise_id)
+    if not row:
+        raise HTTPException(404, "Exercise not found")
+    if req.attempt_id is None:
+        req.attempt_id = "legacy-" + gateway.digest({"exercise": exercise_id,
+            "revision": req.exercise_revision, "solution": req.solution})
+    try:
+        attempt, _ = gateway.accept_and_evaluate(repo, user_id, row["exercise"], req.solution,
+            req.exercise_revision, req.attempt_id, context={"standalone": True})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    exercise = gateway.get_standalone(repo, user_id, exercise_id)
+    exercise["grade_result"] = public_result({**(attempt.get("result") or gateway.outcome("pending", "Assessment is pending.")),
+        "attempt_id": req.attempt_id, "applied": False})
+    return exercise
+
+
+@router.get("/attempts/{user_id}/{attempt_id}")
+def get_attempt(request: Request, user_id: str, attempt_id: str):
+    authed_user_id = _get_authed_user_id(request, user_id)
+    if user_id != authed_user_id:
+        raise HTTPException(403, "Forbidden: Cannot access another user's practice")
+    attempt = GradingStore(get_default_repository()).get(user_id, "attempt:" + attempt_id)
+    if attempt is None:
+        raise HTTPException(404, "Attempt not found")
+    return public_result({**(attempt.get("result") or gateway.outcome("pending", "Assessment is pending.")),
+        "attempt_id": attempt_id, "applied": attempt.get("applied", False)})
+
+
+@router.post("/sessions/{user_id}/{session_id}/attempts/{attempt_id}/apply", response_model=SessionResponse)
+def apply_attempt(request: Request, user_id: str, session_id: str, attempt_id: str, node_id: str):
+    authed_user_id = _get_authed_user_id(request, user_id)
+    if user_id != authed_user_id:
+        raise HTTPException(403, "Forbidden: Cannot access another user's practice")
+    try:
+        ls, added, result = gateway.reconcile_lesson(get_default_repository(), user_id, session_id, node_id, attempt_id)
+    except KeyError:
+        raise HTTPException(404, "Attempt or session not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return SessionResponse(session_id=session_id, learning_session=ls, new_node_ids=added, grade_result=result)
 
 
 @router.post("/sessions/{user_id}/{session_id}/lessons/{node_id}/flag", response_model=SessionResponse)

@@ -8,3 +8,17 @@ os.environ.setdefault("MINDMORPH_RICH_CONTENT", "0")
 os.environ.setdefault("MINDMORPH_WEB_RESEARCH", "0")
 os.environ.setdefault("MINDMORPH_RERANK", "0")
 os.environ.setdefault("MINDMORPH_NEO4J_MIRROR", "0")
+os.environ.setdefault("MM_WORKER_LOCK", "tests/fixtures/disabled-worker.lock.json")
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolated_rate_limits(monkeypatch, request):
+    """Keep flow tests independent; authentication/rate-limit tests exercise limits."""
+    from api.limiter import limiter
+    limiter.reset()
+    monkeypatch.setattr(limiter, "enabled", request.module.__name__.endswith("test_auth_and_rate_limiting"))
+    yield
+    limiter.reset()

@@ -1,0 +1,9 @@
+ARG CORE_IMAGE
+FROM ${CORE_IMAGE}
+USER root
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc g++ default-jdk-headless mono-mcs mono-runtime golang-go rustc r-base-core postgresql postgresql-client && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd --uid 1000 --no-create-home --home-dir /work worker
+COPY worker_main.py sqlite_main.py start_postgres.py /opt/mm/
+USER 1000:1000

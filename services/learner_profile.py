@@ -19,8 +19,8 @@ class LearnerProfile(BaseModel):
     def language(cls, value):
         if not value:
             return None
-        value = str(value).strip().lower()
-        return {"js": "javascript", "node": "javascript", "node.js": "javascript", "py": "python", "sqlite": "sql"}.get(value, value)
+        from tools.grading_contract import language_identity
+        return language_identity(str(value))
 
     @field_validator("scope", mode="before")
     @classmethod
@@ -57,7 +57,7 @@ def make_profile(preferences=None, primary_language=None, scope=None, domain=Non
         primary_language=prefs.get("language") or prefs.get("primary_language") or primary_language,
         scope=prefs.get("scope") or scope,
         experience=prefs.get("experience") or prefs.get("level"),
-        goal=prefs.get("goal"),
+        goal=prefs.get("goal") or query,
     ).model_dump(exclude_none=True, exclude_defaults=True)
 
 
@@ -72,6 +72,13 @@ def with_profile(query: str, profile: dict | None) -> str:
 def is_technical(profile: dict | None) -> bool:
     if not profile:
         return True  # older sessions have no declared domain
+    language = str(profile.get("primary_language") or "").strip().lower()
+    if language in {"python", "javascript", "typescript", "sql", "postgresql", "c", "cpp", "csharp", "java",
+        "go", "rust", "r", "ruby", "swift", "kotlin", "php", "scala", "haskell", "lua", "bash", "matlab",
+        "julia", "dart", "elixir", "clojure", "perl", "fortran", "cobol"}:
+        return True
+    if re.search(r"\b(code|coding|programming|python|javascript|typescript|sql|data analysis)\b", str(profile.get("goal") or ""), re.I):
+        return True
     domain = str(profile.get("domain") or "").lower()
     if domain in ("", "learning", "general"):
         return True

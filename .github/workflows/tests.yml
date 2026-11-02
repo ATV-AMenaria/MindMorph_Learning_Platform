@@ -49,6 +49,7 @@ jobs:
       DATABASE_URL: postgresql+psycopg://mindmorph:mindmorph@127.0.0.1:5432/mindmorph?connect_timeout=3
       MINDMORPH_STORE: postgres
       MINDMORPH_REQUIRE_DB_TESTS: "1"
+      MINDMORPH_REQUIRE_GRADING_DB: "1"
       MINDMORPH_TEST_DB_CONTAINER: mindmorph-remaining-tests-ci
     steps:
       - uses: actions/checkout@v4
@@ -66,7 +67,7 @@ jobs:
           done
           exit 1
       - run: python -m alembic upgrade head
-      - run: pytest tests/test_repository_postgres.py tests/test_rag_pgvector.py tests/test_grounding_storage.py -q
+      - run: pytest tests/test_repository_postgres.py tests/test_rag_pgvector.py tests/test_grounding_storage.py tests/test_grading_storage.py -q
       - if: always()
         run: docker rm -f mindmorph-remaining-tests-ci
 

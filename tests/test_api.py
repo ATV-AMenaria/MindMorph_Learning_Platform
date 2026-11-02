@@ -12,7 +12,7 @@ if ROOT not in sys.path:
 os.environ["MINDMORPH_STORE"] = "memory"  # zero-infra store for the test (set before app import)
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.api_client import AuthenticatedClient as TestClient
 
 import api.routes as routes
 from api.main import app
@@ -43,6 +43,8 @@ def _scout_ls():
 @pytest.fixture(autouse=True)
 def _clean_store():
     _memory_singleton._store.clear()
+    if hasattr(_memory_singleton, "_grading_records"):
+        _memory_singleton._grading_records.clear()
     yield
     _memory_singleton._store.clear()
 
@@ -72,6 +74,7 @@ def client(monkeypatch):
 
     monkeypatch.setattr(routes, "open_lesson", fake_open)
     monkeypatch.setattr(routes, "grade", fake_grade)
+    monkeypatch.setattr(routes.gateway, "_evaluate", lambda *args: {"passed": 1, "total": 1, "failures": [], "score": 100})
     return TestClient(app)
 
 
@@ -171,7 +174,7 @@ def test_open_lesson_then_grade_persists_mastery(client):
     # 'a' is the unlocked root.
     r = client.post(f"/sessions/u1/{sid}/lessons/a")
     assert r.status_code == 200 and r.json()["learning_session"]["selected_node"] == "a"
-    g = client.post(f"/sessions/u1/{sid}/grade", params={"node_id": "a"}, json={"solution": "code"})
+    g = client.post(f"/sessions/u1/{sid}/grade", params={"node_id": "a"}, json={"solution": "code", "exercise_revision": r.json()["learning_session"]["lessons"]["a"]["exercise"]["revision"]})
     assert g.status_code == 200
     # Re-fetch: mastery durably persisted.
     after = client.get(f"/sessions/u1/{sid}").json()["learning_session"]
@@ -254,7 +257,7 @@ def test_grade_sub40_adds_remedial_node_and_locks_via_http(monkeypatch):
     }, {"composes": 1, "cache_hits": 0, "tokens_in": 0, "tokens_out": 0, "est_cost_usd": 0.0, "unknown": True}))
     # Stub the grader LLM/execution boundary: force a sub-40 score.
     import agents.exercise.grader_agent as grader
-    monkeypatch.setattr(grader, "grade_submission", lambda fmt, sol, art: {"score": 20, "passed": 0})
+    monkeypatch.setattr(routes.gateway, "_evaluate", lambda *args: {"score": 20, "passed": 1, "total": 5, "failures": ["Fixture learner check failed"]})
     # Stub the adaptation LLM boundary: propose one remedial prerequisite for node 'a'.
     adaptation = GraphAdaptation(
         new_nodes=[SkillNode(id="a_basics", label="A Basics", description="foundations", level="foundational")],
