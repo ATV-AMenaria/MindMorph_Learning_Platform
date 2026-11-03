@@ -317,7 +317,7 @@ def _broken_session() -> dict:
 @pytest.fixture
 def api_client(monkeypatch):
     import api.routes as routes
-    from fastapi.testclient import TestClient
+    from tests.api_client import AuthenticatedClient as TestClient
     from api.main import app
     from persistence.repository import _memory_singleton
     from services.learning_service import LockedNodeError
@@ -340,6 +340,7 @@ def api_client(monkeypatch):
 
     monkeypatch.setattr(routes, "open_lesson", fake_open)
     monkeypatch.setattr(routes, "grade", fake_grade)
+    monkeypatch.setattr(routes.gateway, "_evaluate", lambda *args: {"score": 100, "passed": 1, "total": 1, "failures": []})
     yield TestClient(app)
     _memory_singleton._store.clear()
 
@@ -359,7 +360,7 @@ def test_phantom_source_session_is_finishable_through_the_api(api_client, caplog
             r = api_client.post(f"/sessions/u1/s1/lessons/{node}")
             assert r.status_code == 200, (node, r.text)
             r = api_client.post(f"/sessions/u1/s1/grade?node_id={node}",
-                                json={"solution": "print(1)"})
+                                json={"solution": "print(1)", "exercise_revision": r.json()["learning_session"]["lessons"][node]["exercise"]["revision"]})
             assert r.status_code == 200, (node, r.text)
 
     final = api_client.get("/sessions/u1/s1").json()["learning_session"]

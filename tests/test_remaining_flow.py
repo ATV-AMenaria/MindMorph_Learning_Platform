@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.api_client import AuthenticatedClient as TestClient
 from sqlalchemy.exc import OperationalError
 
 from api.main import app
@@ -97,8 +97,8 @@ def test_quiz_retries_preserve_mastery_and_result_identifiers():
     ls = session()
     ls["node_state"]["a"].update(status="mastered", best_score=100, attempts=3)
     ls["assessment"] = {"submitted": False, "quiz": {"questions": [
-        {"node_id": "a", "options": ["yes", "no"], "correct_index": 0},
-        {"node_id": "a", "options": ["one", "two"], "correct_index": 1},
+        {"node_id": "a", "question": "Does A apply?", "options": ["yes", "no"], "correct_index": 0},
+        {"node_id": "b", "question": "Which B?", "options": ["one", "two"], "correct_index": 1},
     ]}}
     svc.grade_assessment(ls, [0, 1])
     assert ls["node_state"]["a"]["status"] == "mastered"

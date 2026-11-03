@@ -73,6 +73,7 @@ class LearningPlanState(TypedDict, total=False):
     final_content: Optional[str]
     # Exercise branch
     exercise_format: Optional[str]
+    exercise_language: Optional[str]
     exercise_statement: Optional[str]
     grading_artifact: Optional[dict]
     # Non-SCOUT/CONTENT/EXERCISE routes
@@ -382,6 +383,7 @@ def build_graph(
                                            "user_id": state.get("user_id"), "public_query": state.get("public_query") or state["user_query"]})
         return {
             "exercise_format": out.get("exercise_format"),
+            "exercise_language": out.get("exercise_language"),
             "exercise_statement": out.get("exercise_statement"),
             "grading_artifact": out.get("grading_artifact"),
             "grounding": out.get("grounding"),

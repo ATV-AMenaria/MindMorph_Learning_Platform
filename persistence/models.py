@@ -65,3 +65,13 @@ class UserRow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )
+
+
+class GradingRecordRow(Base):
+    """Private packages, attempts and request bindings; never returned wholesale."""
+    __tablename__ = "grading_records"
+    user_id: Mapped[str] = mapped_column(String, primary_key=True)
+    record_id: Mapped[str] = mapped_column(String, primary_key=True)
+    kind: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    data: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, server_default=func.now())

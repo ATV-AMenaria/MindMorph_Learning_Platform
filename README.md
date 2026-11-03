@@ -51,17 +51,17 @@ the failed node locked — it's never silently left open. Lock state itself isn'
 recomputed on every read from the graph plus mastery state (`services/completion.py`), so it can't drift
 out of sync.
 
-**Code is submitted in the browser and graded by the backend.** A Monaco editor
-(`web/components/CodeEditor.tsx`) collects the submission. `tools/code_executor.py` runs Python tests,
-Node.js JavaScript tests, or SQLite SQL assertions with a wall-clock timeout and a secret-scrubbed
-environment. Async tests must complete, empty test modules cannot earn credit, and scores come from
-validated result files rather than learner stdout. Broken grading artifacts report “not graded” and
-leave mastery unchanged. This subprocess is a hang-guard for a local single-user prototype, **not a
-security sandbox**; real isolation is a hosted-deployment item. JavaScript grading requires Node.js
-20. SQL exercises currently ask the learner to create the required schema/data; verification SELECTs
-check the result. Case studies use LLM rubric grading. A separate, optional in-browser JupyterLite scratchpad
-(`web/components/Sandbox.tsx`) is for free experimentation only — the graded submission always goes
-through the editor above.
+**Code is submitted in the browser and assessed by the backend.** Versioned isolated worker profiles
+serve both Run and grading; references and hidden checks stay server-side. Only validated, saved,
+eligible evidence changes progress. Attempts are replay-safe, drafts survive failures and reloads,
+and standalone practice has saved history. Uncalibrated rubric feedback leaves mastery unchanged.
+Runtime availability is explicit; the 14 tested profiles include real React/TSX browser execution. The legacy local subprocess
+runner is an explicit trusted-local compatibility option, never the route for new generated tasks.
+See the [P2 #8 implementation checkpoint](docs/P2_8_IMPLEMENTATION.md) for supported profiles,
+operator commands, verified evidence and the live-acceptance limits. The local app has been migrated
+to PostgreSQL with existing paths and document vectors preserved. For another database, back up and
+apply `0006_grading_records` before activation. `conda run -n mindmorph python scripts/run_local_api.py --start-existing-db`
+launches the local API and keeps its configured WSL worker/database host awake.
 
 ## Architecture notes
 

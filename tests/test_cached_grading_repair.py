@@ -4,7 +4,7 @@ from copy import deepcopy
 from unittest.mock import Mock
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.api_client import AuthenticatedClient as TestClient
 
 from agents.exercise import grader_agent
 from agents.exercise.grading_schema import GradingArtifact
@@ -58,6 +58,7 @@ def test_reopening_failed_cached_setup_repairs_only_tests(monkeypatch):
 
 
 def test_missing_tests_repaired_and_real_grade_persisted_through_http(monkeypatch):
+    monkeypatch.setenv("MINDMORPH_TRUSTED_LOCAL_GRADING", "1")  # legacy compatibility only
     builder = _mock_grader(monkeypatch, _artifact())
     repo = InMemoryLearningSessionRepository()
     repo.save("audit", "repair", _session())
@@ -87,7 +88,7 @@ def test_failed_retry_still_does_not_score_or_adapt(monkeypatch, error):
         ls, "a", "def add(a,b): return a+b", exercise_revision="original"
     )
     assert result["harness_error"] is True
-    assert "score" not in result
+    assert result.get("score") is None
     assert ls["node_state"] == before
     assert ls["lessons"]["a"]["exercise"]["grading_artifact"] is None
     assert new_nodes == []

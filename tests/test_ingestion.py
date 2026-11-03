@@ -129,7 +129,7 @@ def test_content_graph_uses_uploaded_material_for_that_user():
 # --- HTTP endpoint ------------------------------------------------------------------------------
 
 def test_ingest_endpoint_accepts_pdf():
-    from fastapi.testclient import TestClient
+    from tests.api_client import AuthenticatedClient as TestClient
     from api.main import app
 
     client = TestClient(app)
@@ -145,7 +145,7 @@ def test_ingest_endpoint_accepts_pdf():
 
 
 def test_ingest_endpoint_rejects_non_pdf():
-    from fastapi.testclient import TestClient
+    from tests.api_client import AuthenticatedClient as TestClient
     from api.main import app
 
     client = TestClient(app)

@@ -121,13 +121,14 @@ def test_postgres_state_survives_fresh_api_processes(repo, user_id):
     import subprocess
     from sqlalchemy import text
     from persistence.db import get_engine
+    from services.public_projection import public_session
     state = _ls("restart")
     state["node_state"]["a"].update(status="mastered", best_score=100, attempts=1)
     state["lessons"] = {"a": {"content": "Saved lesson", "exercise": {"revision": "saved-v1"}}}
     state["assessment"] = {"submitted": True, "results": [{"question_id": "q1", "is_correct": True}]}
     repo.save(user_id, "restart", state)
     code = '''import json, sys
-from fastapi.testclient import TestClient
+from tests.api_client import AuthenticatedClient as TestClient
 from api.main import app
 user = json.load(sys.stdin)
 with TestClient(app) as client:
@@ -144,7 +145,10 @@ with TestClient(app) as client:
                                     capture_output=True, timeout=30, cwd=ROOT,
                                     env={**os.environ, "MINDMORPH_STORE": "postgres", "GROQ_API_KEYS": ""})
             assert result.returncode == 0, result.stderr[-2000:]
-            assert json.loads(result.stdout.strip().splitlines()[-1]) == state
+            # HTTP responses normalize legacy diagnostics and omit private graders;
+            # persistence must still retain the original saved representation.
+            assert json.loads(result.stdout.strip().splitlines()[-1]) == public_session(state)
+            assert repo.get(user_id, "restart") == state
     finally:
         repo.delete(user_id, "restart")
 
@@ -159,7 +163,7 @@ def test_real_database_outage_and_recovery(repo, user_id, monkeypatch):
     import json
     import subprocess
     import time
-    from fastapi.testclient import TestClient
+    from tests.api_client import AuthenticatedClient as TestClient
     from api.main import app
     from persistence.errors import StorageUnavailableError
     from persistence.repository import _memory_singleton

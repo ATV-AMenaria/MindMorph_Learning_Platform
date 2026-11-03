@@ -266,9 +266,9 @@ def test_sql_wrong_data_missing_schema_and_learner_syntax_score_zero(solution):
 def test_descendant_processes_are_cleaned_after_exit_and_timeout(tmp_path, timeout):
     marker = tmp_path / "descendant_was_left_running"
     child_source = f"import time,pathlib; time.sleep(2); pathlib.Path({str(marker)!r}).write_text('alive')"
-    solution = f"import subprocess,sys,time\nsubprocess.Popen([sys.executable,'-c',{child_source!r}])\n"
+    solution = f"import subprocess,sys,time\nchild_process = subprocess.Popen([sys.executable,'-c',{child_source!r}])\n"
     if timeout: solution += "time.sleep(5)\n"
-    result = executor.execute_tests(solution, "import solution\ndef test_done(): assert True", timeout=1 if timeout else 10)
+    result = executor.execute_tests(solution, "import solution\ndef test_done(): assert solution.child_process.pid > 0", timeout=1 if timeout else 10)
     assert result["timed_out"] is timeout
     if not timeout: assert result["score"] == 100
     time.sleep(2.2)

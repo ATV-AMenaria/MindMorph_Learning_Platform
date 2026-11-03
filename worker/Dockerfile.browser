@@ -1,0 +1,10 @@
+ARG CORE_IMAGE
+FROM ${CORE_IMAGE}
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends chromium fonts-liberation && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd --uid 1000 --no-create-home --home-dir /work worker && \
+    cd /opt/mm && npm install --save-exact playwright-core@1.60.0 esbuild@0.25.0 @types/react@19.0.0 @types/react-dom@19.0.0
+COPY browser_build.cjs browser_run.cjs /opt/mm/
+USER 1000:1000
+

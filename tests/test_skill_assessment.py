@@ -32,7 +32,7 @@ def _scout_state():
 def _quiz(*items) -> AssessmentQuiz:
     return AssessmentQuiz(
         questions=[
-            MCQQuestion(node_id=nid, question="q", options=["w", "x", "y", "z"], correct_index=ci)
+            MCQQuestion(node_id=nid, question=f"Question for {nid}", options=["w", "x", "y", "z"], correct_index=ci)
             for nid, ci in items
         ]
     )
@@ -110,13 +110,14 @@ def test_length_mismatch_raises():
         svc.grade_assessment(ls, [1, 0])
 
 
-def test_hallucinated_node_id_is_ignored_no_phantom():
+def test_hallucinated_node_id_rejects_quiz_without_phantom_progress():
     # Correct answer but node_id not in the graph → must be skipped, no phantom node_state entry.
     ls = _session_with_quiz(_quiz(("ghost", 1), ("a", 0)))
-    svc.grade_assessment(ls, [1, 0])  # both "correct"
+    with pytest.raises(ValueError):
+        svc.grade_assessment(ls, [1, 0])
     assert "ghost" not in ls["node_state"]            # no phantom
     assert set(ls["node_state"]) == {"a", "b"}        # counter stays sound
-    assert ls["node_state"]["a"]["status"] == "in_progress"
+    assert ls["node_state"]["a"]["status"] == "available"
 
 
 def test_no_quiz_raises():

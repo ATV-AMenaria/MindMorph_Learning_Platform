@@ -86,8 +86,8 @@ but nothing exports them to a metrics backend (see roadmap below).
 | Step (target) | Status | Code path | Notes |
 |---|---|---|---|
 | Format Selector / GitHub / Blog / Dataset agents | ✅ | `agents/exercise/format_selector_agent.py`, `graph/exercise_graph.py` | LangGraph Exercise DAG: format selector → [GitHub MCP \| Blog (ddgs) \| Dataset (ddgs links)] fan-in. EXERCISE route now live (no more placeholder). |
-| Synthesizer / Grading Setup (unit tests + rubric) | ✅ | `agents/exercise/exercise_synthesizer_agent.py`, `agents/exercise/grader_agent.py` | Synthesizer personalizes; Grader emits unit tests (coding) or rubric (case study). |
-| **Live auto-grading** | ✅ | `tools/code_executor.py`, `grader_agent.grade_submission` | Python lightweight runner (sync/async, no pytest dependency in child), Node.js 20 native test runner (existing suites and exported test functions), SQLite schema/data exercises. SQL assertions share one validated JSON-array contract; verification queries are read-only. Empty, malformed, fixture-dependent or generator artifacts cannot earn credit. Separate result files, process exit checks and bounded diagnostics prevent stdout-based or unfinished-test grades. Harness defects leave mastery unchanged. Local hang-guard, not a security sandbox. |
+| Synthesizer / Grading Setup | ✅ | `agents/exercise/`, `graph/exercise_graph.py` | Capability-aware tasks, compact execution/rubric schemas, saved-task repair and private evaluator packages. |
+| **Shared assessment** | 🟡 | `services/grading_gateway.py`, `tools/isolated_runner.py` | Fourteen isolated profiles including real React/TSX; positive/negative release controls, trusted scoring, durable replay and exactly-once application. Unverified outcomes do not change progress. Rubric review remains formative; the full live AI matrix is acceptance-open under the retained budget. Legacy host execution is an explicit trusted-local compatibility option. |
 
 ## 5. Status by Architecture Layer
 
@@ -113,7 +113,7 @@ but nothing exports them to a metrics backend (see roadmap below).
 | Skill graph renderer | ✅ | `graph/skill_graph_render.py` | Deterministic SkillGraph JSON → Mermaid. |
 | LLM config | ✅ | `config.py` | Groq `openai/gpt-oss-120b` / local Ollama `qwen2.5:7b`\|`:14b`, temp 0.1. `GROQ_API_KEYS` (comma-separated pool) is optional and validated nowhere — absent/empty simply selects the Ollama path. |
 | Next.js frontend | ✅ | `web/` | SCOUT skill-graph + CONTENT dual-path, Mermaid render, lesson view, grading. Legacy Streamlit `app.py` **retired** (P3 #12) — it no longer exists in the repo. |
-| Tests | 🟡 | `tests/`, `web/tests/` | 16 October verification: pytest **385 passed, 3 DB-gated checks skipped on each of Windows and Ubuntu**, across 35 files; Playwright **44 passed** across 7 specs. Includes real Python/JS/SQL runner regressions and HTTP grading/mastery checks, plus existing graph/RAG/provider/assessment/tutor/observability tests. Type checking and clean production build pass. Real DB durability and live AI quality remain separate checks. |
+| Tests | 🟡 | `tests/`, `web/tests/` | 31 October: **532 backend checks passed, 19 service-gated skips**, plus one subsequent model-isolation check; **67 production browser checks**, **five real DB lifecycle checks** and **58 worker controls** passed. Type checking/build and zero-model real Python/React HTTP smoke passed. Full live generation and independent rubric calibration remain unverified. |
 
 ---
 
@@ -143,7 +143,8 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
    **Grading Setup** (unit tests for code, LLM rubric for analysis) + **live auto-grading**
    (`tools/code_executor.py`). *Satisfies:* §3.3, §6.4. *Closed:* EXERCISE "Under development".
    The learn → plan → content → **practice + grade** loop now runs end-to-end on LangGraph.
-   Deferred: containerized grading sandbox (Evaluation Service), real dataset ingestion.
+   P2 #8 now supplies isolated execution, private packages and durable grading/recovery; see its
+   implementation record for validated scope and live-evaluation limits. Real dataset ingestion remains deferred.
 5b. ✅ **Adaptive learning loop** — clickable skill graph → composed lesson (content + embedded
     exercise) → live grade → **mastery capture** (sticky per-node status overlay) → **adaptation**:
     a graded score mutates the graph (remedial prerequisite nodes on a low score / unlock edges on
@@ -203,6 +204,15 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
    Remote multi-vendor HTTP routing (Anthropic/OpenAI/Gemini) still open. *Satisfies (partial):* §5.3, §5.7.
 
 ### P2 — Personalization & ingestion
+**31 October 2026 implementation/activation:** all 14 runtime profiles including real React/TSX,
+semantic evaluator repair, creation crash recovery, explicit new-practice recovery and persisted
+Run input are implemented. The app now uses PostgreSQL; four paths and six document chunks were
+preserved. 532 backend checks, 67 browser checks, five DB lifecycle checks and the additional model
+isolation check passed. **P2 #8 remains acceptance-open** for the incomplete live AI matrix after
+the original 2M-token checkpoint. On 2 November the user authorized a 3M cumulative cap with the same 500-call/USD5 limits; [follow-up evaluation](P2_8_LIVE_FOLLOWUP.md) resumed without resetting usage. A [60-submission human rating pack](rubric-rating-pack/README.md) is ready; rubric review remains formative without independent calibration. See
+[the implementation record](P2_8_IMPLEMENTATION.md) for current behavior and verification; older
+dated runner/test counts below describe their historical checkpoints.
+
 8. 🟡 **Onboarding + Dynamic Skill Assessment** - **21 October additions:** follow-up questions use
    validated IDs/options and normalized language/scope values; collected answers become a learner
    profile supplied to research, consensus, diagnostics, lessons, examples, exercises and tutor context.
@@ -219,7 +229,7 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
    correct answers give those nodes a **head-start (`in_progress`, score `ASSESSMENT_PASS_SCORE`=60), NOT
    `mastered`**, without counting an exercise attempt — one MCQ isn't mastery, and full-mastering on a perfect
    quiz would empty the path (the learner still studies; passing the node's exercise upgrades it). Unknown/
-   hallucinated `node_id`s skipped (no phantom node_state). Web quiz UI (`web/components/AssessmentQuiz.tsx`)
+   hallucinated `node_id`s now reject an invalid quiz before publication or scoring (no phantom node_state). Web quiz UI (`web/components/AssessmentQuiz.tsx`)
    gates the session page until submitted/skipped. Quiz generation is best-effort (failure → no quiz, path
    still loads). **Lightweight onboarding** — real **social sign-in deferred to P3 #13**; MVP login stays
    localStorage. *Satisfies:* §2.

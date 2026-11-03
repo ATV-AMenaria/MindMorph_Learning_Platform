@@ -80,7 +80,7 @@ def _client(monkeypatch, agent):
     monkeypatch.setenv("MINDMORPH_STORE", "memory")
     monkeypatch.setattr(svc, "_get_tutor_agent", lambda: agent)
     monkeypatch.setattr("api.routes.build_tutor_messages", lambda *a, **k: [])
-    from fastapi.testclient import TestClient
+    from tests.api_client import AuthenticatedClient as TestClient
     from api.main import app
     from persistence.repository import get_default_repository
 

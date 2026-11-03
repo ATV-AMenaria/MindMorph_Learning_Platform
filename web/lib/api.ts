@@ -9,6 +9,8 @@ import type {
   StartSessionResponse,
   FollowUpResponse,
   GroundingInfo,
+  Exercise,
+  RunResult,
 } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -92,12 +94,24 @@ export const api = {
     );
   },
 
-  grade(userId: string, sessionId: string, nodeId: string, solution: string, exerciseRevision?: string) {
+  newPractice(userId: string, sessionId: string, nodeId: string, revision: string | undefined, requestId: string) {
+    return req<SessionResponse>(`/sessions/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}/lessons/${encodeURIComponent(nodeId)}/practice`, { method: "POST", body: JSON.stringify({ exercise_revision: revision, request_id: requestId }) });
+  },
+
+  grade(userId: string, sessionId: string, nodeId: string, solution: string, exerciseRevision?: string, attemptId?: string) {
     const q = new URLSearchParams({ node_id: nodeId }).toString();
     return req<SessionResponse>(
       `/sessions/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}/grade?${q}`,
-      { method: "POST", body: JSON.stringify({ solution, exercise_revision: exerciseRevision }) },
+      { method: "POST", body: JSON.stringify({ solution, exercise_revision: exerciseRevision, attempt_id: attemptId }) },
     );
+  },
+
+  getAttempt(userId: string, attemptId: string) {
+    return req<import("./types").GradeResult>(`/attempts/${encodeURIComponent(userId)}/${encodeURIComponent(attemptId)}`);
+  },
+
+  applyAttempt(userId: string, sessionId: string, nodeId: string, attemptId: string) {
+    return req<SessionResponse>(`/sessions/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}/attempts/${encodeURIComponent(attemptId)}/apply?node_id=${encodeURIComponent(nodeId)}`, { method: "POST" });
   },
 
   flagLesson(userId: string, sessionId: string, nodeId: string, reason?: string) {
@@ -107,11 +121,25 @@ export const api = {
     );
   },
 
-  gradeAssessment(userId: string, sessionId: string, answers: number[]) {
+  gradeAssessment(userId: string, sessionId: string, answers: number[] | undefined, action: "submit" | "skip" | "resume" = "submit", quizRevision?: string) {
     return req<SessionResponse>(
       `/sessions/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}/assessment`,
-      { method: "POST", body: JSON.stringify({ answers }) },
+      { method: "POST", body: JSON.stringify({ answers, action, quiz_revision: quizRevision }) },
     );
+  },
+
+  capabilities() { return req<Record<string, unknown>>("/capabilities"); },
+  listExercises(userId: string) { return req<Exercise[]>(`/exercises/${encodeURIComponent(userId)}`); },
+  getExercise(userId: string, id: string) { return req<Exercise>(`/exercises/${encodeURIComponent(userId)}/${encodeURIComponent(id)}`); },
+  gradeExercise(userId: string, id: string, solution: string, revision: string | undefined, attemptId: string) {
+    return req<Exercise & { grade_result?: import("./types").GradeResult }>(`/exercises/${encodeURIComponent(userId)}/${encodeURIComponent(id)}/grade`, { method: "POST", body: JSON.stringify({ solution, exercise_revision: revision, attempt_id: attemptId }) });
+  },
+  run(basePath: string, solution: string, exerciseRevision: string | undefined, runId: string, signal: AbortSignal, stdin = "") {
+    return req<RunResult>(basePath, { method: "POST", body: JSON.stringify({ solution, stdin, exercise_revision: exerciseRevision, run_id: runId }), signal });
+  },
+  cancelRun(basePath: string, runId: string) {
+    const [path, query] = basePath.split("?");
+    return req<RunResult>(`${path}/${encodeURIComponent(runId)}${query ? `?${query}` : ""}`, { method: "DELETE" });
   },
 
   // Streaming chat (SSE over POST). See readSseFrames above for the shared transport.
@@ -164,6 +192,7 @@ export const api = {
       primary_language?: string | null;
       scope?: string;
       domain?: string;
+      request_id?: string;
       onStage: (stage: string, label: string) => void;
       onDone: (res: StartSessionResponse) => void;
       onError: (m: string) => void;
@@ -180,6 +209,7 @@ export const api = {
         primary_language: opts.primary_language,
         scope: opts.scope,
         domain: opts.domain,
+        request_id: opts.request_id,
       }),
     });
     if (!res.ok || !res.body) {
