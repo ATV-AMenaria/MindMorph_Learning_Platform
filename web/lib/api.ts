@@ -12,6 +12,7 @@ import type {
   Exercise,
   RunResult,
 } from "./types";
+import { clearAuth, readAuth } from "./auth";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -24,11 +25,20 @@ export class LockedError extends Error {
   }
 }
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
+async function authenticatedFetch(path: string, init?: RequestInit, authenticated = true): Promise<Response> {
+  const token = authenticated ? readAuth()?.accessToken : undefined;
+  const headers = new Headers(init?.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const res = await fetch(`${BASE}${path}`, { ...init, headers });
+  // A delayed failure from an old account must not sign out a newer account.
+  if (authenticated && res.status === 401 && (!token || readAuth()?.accessToken === token)) clearAuth();
+  return res;
+}
+
+async function req<T>(path: string, init?: RequestInit, authenticated = true): Promise<T> {
+  const headers = new Headers(init?.headers);
+  headers.set("Content-Type", "application/json");
+  const res = await authenticatedFetch(path, { ...init, headers }, authenticated);
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     const detail = body?.detail;
@@ -63,6 +73,17 @@ async function readSseFrames(res: Response, onFrame: (evt: any) => boolean | voi
 }
 
 export const api = {
+  login(email: string, password: string) {
+    return req<{ access_token: string; user_id: string; email: string }>("/auth/login", {
+      method: "POST", body: JSON.stringify({ email, password }),
+    }, false);
+  },
+
+  register(email: string, password: string) {
+    return req<{ access_token: string; user_id: string; email: string }>("/auth/register", {
+      method: "POST", body: JSON.stringify({ email, password }),
+    }, false);
+  },
   getFollowUp(query: string) {
     return req<FollowUpResponse>("/sessions/followup", {
       method: "POST",
@@ -150,8 +171,8 @@ export const api = {
     message: string,
     cb: { onToken: (t: string) => void; onDone: () => void; onError: (m: string) => void; onEvidence?: (e: GroundingInfo) => void },
   ): Promise<void> {
-    const res = await fetch(
-      `${BASE}/sessions/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}/chat`,
+    const res = await authenticatedFetch(
+      `/sessions/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}/chat`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -198,7 +219,7 @@ export const api = {
       onError: (m: string) => void;
     },
   ): Promise<void> {
-    const res = await fetch(`${BASE}/sessions/stream`, {
+    const res = await authenticatedFetch("/sessions/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ 
@@ -241,7 +262,7 @@ export const api = {
   async ingestKnowledge(userId: string, file: File): Promise<IngestResponse> {
     const form = new FormData();
     form.append("file", file);
-    const res = await fetch(`${BASE}/users/${encodeURIComponent(userId)}/knowledge`, {
+    const res = await authenticatedFetch(`/users/${encodeURIComponent(userId)}/knowledge`, {
       method: "POST",
       body: form,
     });

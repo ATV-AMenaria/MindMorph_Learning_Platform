@@ -8,6 +8,8 @@ os.environ.setdefault("MINDMORPH_RICH_CONTENT", "0")
 os.environ.setdefault("MINDMORPH_WEB_RESEARCH", "0")
 os.environ.setdefault("MINDMORPH_RERANK", "0")
 os.environ.setdefault("MINDMORPH_NEO4J_MIRROR", "0")
+# Knowledge-tracing tests opt in explicitly; ordinary flow tests retain their contract.
+os.environ.setdefault("MINDMORPH_BKT", "0")
 os.environ.setdefault("MM_WORKER_LOCK", "tests/fixtures/disabled-worker.lock.json")
 
 

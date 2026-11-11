@@ -1,4 +1,5 @@
 import { type Page, expect, test } from "@playwright/test";
+import { seedUser } from "./auth-fixture";
 
 // The frontend half of the read-time phantom-prerequisite guard (e9694bb + 36a81c0). A session
 // persisted before the build-time guard landed carries an edge whose SOURCE is a node id the graph
@@ -51,7 +52,7 @@ async function mockApi(page: Page) {
 
 test("a phantom prerequisite neither locks the node nor leaks its slug", async ({ page }) => {
   await mockApi(page);
-  await page.addInitScript(() => localStorage.setItem("mindmorph.userId", "e2e@test.com"));
+  await seedUser(page, "e2e@test.com");
   await page.goto("/session/sess1");
   await expect(page.getByText("skills complete")).toBeVisible();
 

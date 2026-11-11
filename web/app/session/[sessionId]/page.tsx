@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AssessmentQuiz } from "@/components/AssessmentQuiz";
 import { AssessmentResults } from "@/components/AssessmentResults";
 import { GradeResult } from "@/components/GradeResult";
@@ -22,6 +22,7 @@ export default function SessionPage() {
   const { userId, ready } = useUser();
   const router = useRouter();
   const sessionId = String(useParams().sessionId);
+  useEffect(() => { if (ready && !userId) router.replace("/"); }, [ready, userId, router]);
   const qc = useQueryClient();
   const [lockMsg, setLockMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -151,10 +152,9 @@ export default function SessionPage() {
   });
 
   if (ready && !userId) {
-    router.push("/");
     return null;
   }
-  if (sessionQ.isLoading) return <Center>Loading path…</Center>;
+  if (!ready || sessionQ.isLoading) return <Center>Loading path…</Center>;
   if (sessionQ.isError || !sessionQ.data) return <Center>Couldn’t load this path.</Center>;
 
   const session = sessionQ.data.learning_session;

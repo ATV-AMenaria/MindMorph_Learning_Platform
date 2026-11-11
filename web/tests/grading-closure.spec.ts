@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { seedUser } from "./auth-fixture";
 
 test.setTimeout(45_000);
 
@@ -21,7 +22,7 @@ async function setup(page: Page, diagnostic = false) {
   if (diagnostic) state.assessment = { submitted: false, status: "pending", quiz_revision: "q1", quiz: { questions: [
     { id: "q1", node_id: "a", question: "What is twice two?", options: ["1", "2", "3", "4"] },
   ] } };
-  await page.addInitScript(() => { if (!localStorage.getItem("mindmorph.userId")) localStorage.setItem("mindmorph.userId", "closure@test.com"); });
+  await seedUser(page, "closure@test.com");
   await page.route("**/vs/**", (route) => route.abort());
   await page.route("**://localhost:8000/**", async (route) => {
     const url = new URL(route.request().url());
@@ -113,7 +114,11 @@ test("new revision requires explicit restore and another learner gets no draft",
   await expect(await plain(page)).toHaveValue("");
   await page.getByRole("button", { name: "Restore it", exact: true }).click();
   await expect(await plain(page)).toHaveValue("old revision answer");
-  await page.evaluate(() => localStorage.setItem("mindmorph.userId", "another@test.com"));
+  await page.evaluate(() => {
+    localStorage.setItem("mindmorph.userId", "another@test.com");
+    sessionStorage.setItem("mindmorph.auth", JSON.stringify({ accessToken: "another-fixture-token",
+      userId: "another@test.com", email: "another@test.com" }));
+  });
   await page.reload();
   await expect(await plain(page)).toHaveValue("");
 });

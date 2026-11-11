@@ -1,31 +1,42 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
-// MVP identity: a localStorage-persisted user id (email). No auth yet (roadmap P3 #13) — this is the
-// key the backend persists progress under, nothing more.
-const KEY = "mindmorph.userId";
+import { useQueryClient } from "@tanstack/react-query";
+import { AUTH_CHANGED, clearAuth, readAuth, saveAuth, type AuthSession } from "./auth";
 
 export function useUser() {
   const [userId, setUserId] = useState<string | null>(null);
+  const [email, setEmail] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  const client = useQueryClient();
 
   useEffect(() => {
-    setUserId(localStorage.getItem(KEY));
-    setReady(true);
-  }, []);
+    const refresh = () => {
+      const session = readAuth();
+      setUserId(session?.userId ?? null);
+      setEmail(session?.email ?? null);
+      setReady(true);
+      if (!session) {
+        void client.cancelQueries();
+        client.clear();
+      }
+    };
+    refresh();
+    window.addEventListener(AUTH_CHANGED, refresh);
+    return () => window.removeEventListener(AUTH_CHANGED, refresh);
+  }, [client]);
 
-  const signIn = (id: string) => {
-    const v = id.trim();
-    if (!v) return;
-    localStorage.setItem(KEY, v);
-    setUserId(v);
+  const signIn = (session: AuthSession) => {
+    void client.cancelQueries();
+    client.clear();
+    saveAuth(session);
   };
 
   const signOut = () => {
-    localStorage.removeItem(KEY);
-    setUserId(null);
+    void client.cancelQueries();
+    client.clear();
+    clearAuth();
   };
 
-  return { userId, ready, signIn, signOut };
+  return { userId, email, ready, signIn, signOut };
 }
