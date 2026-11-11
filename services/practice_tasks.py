@@ -25,7 +25,12 @@ def replace_task(repo, user, sid, node, revision, request_id):
     existing = store.get(user, key)
     if existing is None and previous.get('revision') != revision:
         raise SessionConflictError('This exercise changed. Reload before requesting another task.')
-    record, _ = store.put_once(user, key, 'creation', {'state': 'accepted', 'binding': binding})
+    from services import knowledge_tracking as tracking
+    accepted = {'state': 'accepted', 'binding': binding}
+    if existing is None and tracking.enabled():
+        summary = tracking.summarize(store.knowledge_observations(user, sid, node))
+        accepted['practice_guidance'] = summary['recommendation']
+    record, _ = store.put_once(user, key, 'creation', accepted)
     if record['binding'] != binding: raise SessionConflictError('This request ID belongs to a different exercise.')
     if record.get('state') == 'completed': return ls
     if record.get('state') != 'generated':
@@ -34,7 +39,8 @@ def replace_task(repo, user, sid, node, revision, request_id):
         if not claimed: raise SessionConflictError('A new task is already being prepared. Retry the same request shortly.')
         token = record['lease_token']
         try:
-            exercise = new_practice(ls, node, user)
+            frozen = tracking.guidance(record.get('practice_guidance'))
+            exercise = new_practice(ls, node, user, practice_guidance=frozen) if frozen else new_practice(ls, node, user)
             exercise.setdefault('id', uuid.uuid4().hex)
             exercise.setdefault('revision', uuid.uuid4().hex)
             record = store.update(user, key, {'state': 'generated', 'exercise': exercise}, expected_status='accepted', expected_token=token)
@@ -52,6 +58,8 @@ def replace_task(repo, user, sid, node, revision, request_id):
         if exercise.get('status') not in {'ready', 'feedback_only'}:
             raise PracticeUnavailableError('The new task did not pass assessment validation. Your saved exercise and draft are unchanged. Retry availability or request a different task.')
         ls['lessons'][node]['exercise'] = exercise
+        if tracking.enabled():
+            ls['node_state'][node]['knowledge_tracking'] = tracking.summarize(store.knowledge_observations(user, sid, node))
         repo.save(user, sid, ls)
     store.update(user, key, {'state': 'completed', 'exercise_id': exercise['id']}, expected_status='generated')
     return ls

@@ -32,6 +32,17 @@ Comprehensive live lesson/exercise quality, a fresh Ubuntu run and public deploy
 
 ---
 
+**BKT practice pilot - 12 November 2026:** Optional `MINDMORPH_BKT=1` adds local pyBKT
+understanding estimates and history-based guidance for new practice tasks. The first eligible
+grade per distinct lesson exercise supplies evidence; existing mastery thresholds, prerequisite
+locks and remediation still control progression. Observations and summaries commit with grade
+application using existing grading-record/session JSON storage, without a schema migration.
+The feature defaults off and uses fixed, uncalibrated pilot parameters. Local Windows verification:
+**597 backend checks passed (22 environment-gated skips), 8 disposable PostgreSQL lifecycle checks
+passed, 13 relevant browser checks passed; type checking and an isolated production build passed.**
+The Rahul/Priya demo is simulated; improved learner outcomes and live model-generated task quality
+are not established by these checks. See [BKT behavior, setup and evaluation](BKT_PRACTICE.md).
+
 ## 1. Current Architecture vs Target
 
 | | Today (as built) | Target (per architecture docs) |
@@ -100,7 +111,7 @@ but nothing exports them to a metrics backend (see roadmap below).
 | Infrastructure | 🟡 | Test CI exists: Python suite on Windows/Linux with Node.js, plus Playwright. No deployment pipeline, K8s/Terraform or Prometheus. |
 | Analytics & Continuous Improvement | ⛔ | No telemetry pipeline, warehouse, or human-review loop. |
 | LLM Ops & Production | 🟡 | Provider chain (Groq pool → Ollama) ✅ + content-groundedness eval ✅ (`evals/`) + **token/cost accounting** 🟡 (`services/cost.py` `TokenMeter`, priced per model, on the lesson-compose path only — see Cross-cutting) + **latency observability** 🟡 (`services/timing.py` wall-clock spans on the graph / lesson / grade paths — log lines plus a dict on the session payload; no metrics backend or exporter, see Cross-cutting). Still **no** deployment pipeline. |
-| Security & Governance | ⛔ | No auth/RBAC/encryption/PII scrubbing. Only `.env` secrets + `.gitignore`. |
+| Security & Governance | 🟡 | JWT authentication, password sign-in/registration, API ownership checks and per-user rate limits are implemented. Frontend JSON, streaming and upload requests carry the token. Legacy email-only records are preserved without automatic ownership claims. Broader RBAC/governance remains open. |
 
 ## 6. Supporting components
 

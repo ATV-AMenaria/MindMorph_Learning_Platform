@@ -1,4 +1,5 @@
 import { type Page, expect, test } from "@playwright/test";
+import { seedUser } from "./auth-fixture";
 import { sanitizeMermaid } from "../lib/mermaid";
 
 // In-situ counterpart to mermaidContainment.spec.ts. That spec drives the mermaid bundle directly in
@@ -59,7 +60,7 @@ async function mockApi(page: Page, diagram: string) {
 }
 
 async function openSession(page: Page) {
-  await page.addInitScript(() => localStorage.setItem("mindmorph.userId", "e2e@test.com"));
+  await seedUser(page, "e2e@test.com");
   await page.goto("/session/sess1");
   await expect(page.getByText("skills complete")).toBeVisible();
 }

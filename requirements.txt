@@ -38,6 +38,8 @@ langchain-neo4j
 # Python exercise runtime: generated grading tests may import both libraries.
 numpy
 pandas
+# Experimental local knowledge tracing (MINDMORPH_BKT=1).
+pyBKT==1.4.3
 
 # Kafka telemetry producer and event watcher.
 kafka-python

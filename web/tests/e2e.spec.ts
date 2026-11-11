@@ -1,4 +1,13 @@
 import { type Page, expect, test } from "@playwright/test";
+import { seedUser } from "./auth-fixture";
+
+async function fillSolution(page: Page, solution: string) {
+  const plain = page.locator('textarea[aria-label="Your solution"]');
+  const editor = page.locator(".monaco-editor").first();
+  await expect(plain.or(editor).first()).toBeVisible({ timeout: 15000 });
+  if (await editor.isVisible()) { await editor.click(); await page.keyboard.type(solution); }
+  else await plain.fill(solution);
+}
 
 // A 2-node path: 'a' (root, available) → 'b' (locked behind a). Mutated in place across mock calls so
 // grading 'a' makes it mastered and 'b' unlocks — exercising the full adaptive loop in the UI.
@@ -40,6 +49,11 @@ async function mockApi(
   };
   const sid = "sess1";
   const { injectRemedial = false, review } = opts;
+  await page.route("**/exercises/*", route => route.fulfill({ json: [] }));
+  await page.route("**/auth/login", async route => {
+    const { email } = route.request().postDataJSON();
+    return route.fulfill({ json: { access_token: "fixture-access-token", user_id: email, email } });
+  });
   if (review) {
     ls.review_passed = review.passed;
     ls.review_notes = review.notes;
@@ -75,6 +89,7 @@ async function mockApi(
   });
 
   await page.route(`**/sessions/*/${sid}/grade**`, async (route) => {
+    expect(route.request().headers().authorization).toBe("Bearer fixture-access-token");
     if (route.request().method() !== "POST") return route.fallback();
     if (opts.harnessError) {
       return route.fulfill({ json: {
@@ -117,6 +132,7 @@ async function mockApi(
   // Registered last so it wins over the broader "**/sessions/*" list mock above (Playwright matches
   // routes in reverse registration order — last registered is tried first).
   await page.route("**/sessions/stream", async (route) => {
+    expect(route.request().headers().authorization).toBe("Bearer fixture-access-token");
     if (route.request().method() !== "POST") return route.fallback();
     const frames = [
       { stage: "scout", label: "Scouting sources" },
@@ -133,7 +149,8 @@ test("full loop: login → graph → lesson → grade → mastery", async ({ pag
 
   await page.goto("/");
   await page.getByLabel("Email").fill("e2e@test.com");
-  await page.getByRole("button", { name: "Enter" }).click();
+  await page.getByLabel("Password", { exact: true }).fill("fixture-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
 
   // Dashboard → start a path
   await page.getByLabel("What do you want to learn?").fill("Learn Python");
@@ -161,8 +178,7 @@ test("full loop: login → graph → lesson → grade → mastery", async ({ pag
 
   // Grade a (mocked perfect score) → node becomes complete, counter ticks to 1/2.
   // Monaco's real input is .inputarea; click the editor then type so onChange enables the button.
-  await page.locator(".monaco-editor").first().click();
-  await page.keyboard.type("def add(a,b): return a+b");
+  await fillSolution(page, "def add(a,b): return a+b");
   await page.getByRole("button", { name: "Grade my submission" }).click();
   await expect(page.getByText("100%", { exact: true })).toBeVisible();
   await expect(page.getByText("1/2")).toBeVisible();
@@ -194,8 +210,7 @@ test("grading harness failure is explained without showing a zero or changing ma
   await mockApi(page, { harnessError: true });
   await openSession(page);
   await page.getByText("Python Basics").first().click();
-  await page.locator(".monaco-editor").first().click();
-  await page.keyboard.type("def add(a,b): return a+b");
+  await fillSolution(page, "def add(a,b): return a+b");
   await page.getByRole("button", { name: "Grade my submission" }).click();
   await expect(page.getByText("Not graded — the exercise's auto-grading tests are broken on our side.")).toBeVisible();
   await expect(page.getByText(/Your submission was not scored and your progress is unchanged/)).toBeVisible();
@@ -214,7 +229,7 @@ test("remedial node added mid-session gets the entrance animation, even under St
   // Navigate straight to the session route (bypassing the dashboard's session-creation flow, which
   // is a different code path owned elsewhere) — this exercises SkillGraph exactly as it mounts and
   // re-renders under React 19 StrictMode (next.config.mjs: reactStrictMode: true).
-  await page.addInitScript(() => localStorage.setItem("mindmorph.userId", "e2e@test.com"));
+  await seedUser(page, "e2e@test.com");
   await page.goto(`/session/${sid}`);
   await expect(page.getByText("skills complete")).toBeVisible();
 
@@ -228,8 +243,7 @@ test("remedial node added mid-session gets the entrance animation, even under St
 
   // Grading 'a' also injects a remedial node 'c' into the skill graph (simulating an LLM adaptation
   // after a sub-40 grade) — exercising the exact path the entrance animation exists for.
-  await page.locator(".monaco-editor").first().click();
-  await page.keyboard.type("def add(a,b): return a+b");
+  await fillSolution(page, "def add(a,b): return a+b");
   await page.getByRole("button", { name: "Grade my submission" }).click();
   await expect(page.getByText("100%", { exact: true })).toBeVisible();
 
@@ -247,7 +261,7 @@ test("remedial node added mid-session gets the entrance animation, even under St
 // library's internal selection — it never reached onNodeClick, so a keyboard-only user got nothing.
 // The card now owns tabIndex/role/aria-label/keydown itself; these guard that path.
 async function openSession(page: Page) {
-  await page.addInitScript(() => localStorage.setItem("mindmorph.userId", "e2e@test.com"));
+  await seedUser(page, "e2e@test.com");
   await page.goto("/session/sess1");
   await expect(page.getByText("skills complete")).toBeVisible();
 }
@@ -292,7 +306,8 @@ test("locked node shows a lock message", async ({ page }) => {
   await mockApi(page);
   await page.goto("/");
   await page.getByLabel("Email").fill("e2e@test.com");
-  await page.getByRole("button", { name: "Enter" }).click();
+  await page.getByLabel("Password", { exact: true }).fill("fixture-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.getByLabel("What do you want to learn?").fill("Learn Python");
   await page.getByRole("button", { name: "Generate" }).click();
   // Same cold-compile wait as the full-loop test — see the comment there.

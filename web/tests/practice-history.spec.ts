@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { seedUser } from "./auth-fixture";
 import { practiceAttempts } from "../components/PracticeHistory";
 
 const base = () => ({
@@ -45,7 +46,7 @@ test("derives only finite in-range grade events for the requested skill in rever
 test("renders history, expands accessibly, resets on skill change, and fits mobile", async ({ page }) => {
   const payload = base();
   payload.learning_session.events = Array.from({ length: 7 }, (_, i) => ({ stage: "exercise_graded", node_id: "a", score: i * 10, ...(i === 5 ? {} : { ts: i === 6 ? "bad-date" : `2026-06-0${i + 1}T12:00:00Z` }) }));
-  await page.addInitScript(() => localStorage.setItem("mindmorph.userId", "history@test.com"));
+  await seedUser(page, "history@test.com");
   let selectedNode = "a";
   await page.route("**/sessions/**", async (route) => {
     const url = new URL(route.request().url());
@@ -84,7 +85,7 @@ test("renders history, expands accessibly, resets on skill change, and fits mobi
 });
 
 test("grade appears from session cache writeback after lesson cache clears and survives reload", async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem("mindmorph.userId", "history@test.com"));
+  await seedUser(page, "history@test.com");
   let saved = base();
   await page.route("**/sessions/**", async (route) => {
     if (route.request().method() === "POST" && route.request().url().includes("/grade?")) {
@@ -103,7 +104,7 @@ test("grade appears from session cache writeback after lesson cache clears and s
 });
 
 test("a grading harness failure preserves prior attempts and adds no scored history entry", async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem("mindmorph.userId", "history@test.com"));
+  await seedUser(page, "history@test.com");
   const saved = base();
   saved.learning_session.events = [{ stage: "exercise_graded", node_id: "a", score: 55, ts: "2026-10-20T10:00:00Z" }];
   await page.route("**/sessions/**", async (route) => {
@@ -123,7 +124,7 @@ test("a grading harness failure preserves prior attempts and adds no scored hist
 test("older sessions without events show the exact empty state", async ({ page }) => {
   const payload = base();
   delete payload.learning_session.events;
-  await page.addInitScript(() => localStorage.setItem("mindmorph.userId", "history@test.com"));
+  await seedUser(page, "history@test.com");
   await page.route("**/sessions/**", (route) => route.fulfill({ json: payload }));
   await page.goto("/session/history");
   await expect(page.getByText("No recorded practice attempts yet", { exact: true })).toBeVisible();

@@ -33,6 +33,7 @@ from rag.grounding import retrieve_evidence, validate_citations
 
 
 class ExerciseState(TypedDict, total=False):
+    practice_guidance: Optional[dict]
     execution_capability: Optional[dict]
     user_query: str
     exercise_format: str          # 'coding_challenge' | 'case_study'
@@ -159,6 +160,8 @@ def build_exercise_graph(
         if state.get("grounding") is not None:
             kwargs = {"knowledge_evidence": state["grounding"], "lesson_content": state.get("lesson_content")}
         query = with_profile(state["user_query"], state.get("learner_profile"))
+        from services.knowledge_tracking import guidance_prompt
+        query += guidance_prompt(state.get("practice_guidance"))
         capability = state.get("execution_capability")
         if capability:
             import json

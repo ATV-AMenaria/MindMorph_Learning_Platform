@@ -612,7 +612,7 @@ def open_lesson(ls: dict, node_id: str, user_id: Optional[str] = None) -> dict:
 
 
 @private_generation
-def new_practice(ls: dict, node_id: str, user_id: str) -> dict:
+def new_practice(ls: dict, node_id: str, user_id: str, *, practice_guidance: dict | None = None) -> dict:
     """Generate a new task for saved teaching without replacing content or progress."""
     from graph.exercise_graph import build_exercise_graph
     import uuid
@@ -624,18 +624,22 @@ def new_practice(ls: dict, node_id: str, user_id: str) -> dict:
         raise LockedNodeError(node_id, incomplete_prereq_labels(ls['skill_graph'], ls['node_state'], node_id))
     profile = ls.get('learner_profile') or make_profile(ls.get('preferences'), ls.get('primary_language'),
         ls.get('scope'), ls.get('domain'), ls.get('public_query') or ls.get('summary') or '')
+    from services.knowledge_tracking import guidance
+    checked_guidance = guidance(practice_guidance)
     out = _run_async(build_exercise_graph().ainvoke({
         'user_query': node.get('label', '') + ': ' + node.get('description', ''),
         'learner_profile': profile, 'primary_language': ls.get('primary_language') or profile.get('primary_language'),
         'user_id': user_id, 'public_query': ls.get('public_query'),
         'grounding': lesson.get('grounding'), 'lesson_content': lesson['content'],
+        'practice_guidance': checked_guidance,
     }))
     if not out.get('exercise_statement') or not out.get('grading_artifact'):
         raise ValueError('A new assessable task could not be prepared. Your saved exercise is unchanged.')
     return {'id': uuid.uuid4().hex, 'revision': uuid.uuid4().hex, 'origin': 'generated',
         'format': out.get('exercise_format'), 'language': out.get('exercise_language'),
         'statement': out['exercise_statement'], 'grading_artifact': out['grading_artifact'],
-        'grounding': out.get('grounding')}
+        'grounding': out.get('grounding'),
+        **({'practice_mode': checked_guidance['mode']} if checked_guidance else {})}
 
 
 @private_generation

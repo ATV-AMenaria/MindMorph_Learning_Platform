@@ -65,6 +65,13 @@ launches the local API and keeps its configured WSL worker/database host awake.
 
 ## Architecture notes
 
+Optional **BKT practice recommendations** use the first eligible grade on each
+distinct exercise to suggest foundation, standard or application practice for the
+current skill. Install the updated requirements and set `MINDMORPH_BKT=1` to enable
+the pilot; it is off by default and preserves existing mastery/unlocking rules.
+Evidence uses the existing grading records and session JSON, with no schema migration.
+See [BKT setup, behavior and verification](docs/BKT_PRACTICE.md).
+
 - **16 agents, one composition layer.** Agents in `agents/` are single-responsibility and know nothing
   about each other; `graph/` wires them into 4 `StateGraph` workflows (learning plan, lesson, content,
   exercise), plus the skill-graph renderer and the additive-merge half of adaptation described above.
@@ -122,6 +129,11 @@ cd web && npm install && npm run dev
 
 Opens at `http://localhost:3000`. Sessions live in memory for the process lifetime; see below for the
 durable Postgres/RAG setup.
+
+Use **Create an account**, then sign in with your email and password. The frontend
+sends the backend-issued JWT for learning, grading, streams and uploads. Older
+email-only learning records are retained separately until explicitly linked to an
+account. See [local sign-in and legacy-data behavior](docs/LOCAL_SIGN_IN.md).
 
 ### Optional: hosted inference, for when local is too slow
 

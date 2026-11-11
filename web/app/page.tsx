@@ -11,12 +11,13 @@ import { PathSummaryModal } from "@/components/PathSummaryModal";
 import { EvidenceSources, citedText } from "@/components/EvidenceSources";
 import type { FollowUpQuestion, LearningSession, StartSessionResponse } from "@/lib/types";
 import { newRequestId } from "@/lib/useDraft";
+import type { AuthSession } from "@/lib/auth";
 
 export default function HomePage() {
-  const { userId, ready, signIn, signOut } = useUser();
+  const { userId, email, ready, signIn, signOut } = useUser();
   if (!ready) return <Shell><div className="text-text-muted">Loading…</div></Shell>;
   if (!userId) return <LoginGate onSignIn={signIn} />;
-  return <Dashboard userId={userId} onSignOut={signOut} />;
+  return <Dashboard userId={userId} email={email ?? userId} onSignOut={signOut} />;
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
@@ -25,8 +26,25 @@ function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
-function LoginGate({ onSignIn }: { onSignIn: (id: string) => void }) {
+function LoginGate({ onSignIn }: { onSignIn: (session: AuthSession) => void }) {
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [registering, setRegistering] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function submit() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = registering ? await api.register(email.trim(), password) : await api.login(email.trim(), password);
+      onSignIn({ accessToken: result.access_token, userId: result.user_id, email: result.email });
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Sign-in failed. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <Shell>
       <div className="flex flex-1 flex-col justify-center">
@@ -40,36 +58,47 @@ function LoginGate({ onSignIn }: { onSignIn: (id: string) => void }) {
           actually perform.
         </p>
         <form
-          className="mt-10 flex max-w-md gap-3"
+          className="mt-10 flex max-w-md flex-col gap-3"
           onSubmit={(e) => {
             e.preventDefault();
-            onSignIn(email);
+            void submit();
           }}
         >
           <input
             type="email"
             required
+            autoComplete="email"
             placeholder="you@email.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             aria-label="Email"
             className="accent-ring flex-1 rounded-xl border border-white/10 bg-ink-800 px-4 py-3 text-text-strong placeholder:text-text-muted/60"
           />
+          <input type="password" required minLength={registering ? 8 : 1}
+            autoComplete={registering ? "new-password" : "current-password"}
+            placeholder={registering ? "Password (at least 8 characters)" : "Password"}
+            value={password} onChange={(e) => setPassword(e.target.value)} aria-label="Password"
+            className="accent-ring rounded-xl border border-white/10 bg-ink-800 px-4 py-3 text-text-strong placeholder:text-text-muted/60" />
+          {error && <p role="alert" className="text-sm text-amber-300">{error}</p>}
           <button
             type="submit"
-            className="accent-ring rounded-xl px-5 py-3 font-medium text-ink-900 transition-transform hover:-translate-y-0.5"
+            disabled={busy}
+            className="accent-ring rounded-xl px-5 py-3 font-medium text-ink-900 transition-transform hover:-translate-y-0.5 disabled:opacity-50"
             style={{ background: "var(--color-gold)" }}
           >
-            Enter
+            {busy ? "Please wait…" : registering ? "Create account" : "Sign in"}
           </button>
         </form>
-        <p className="mt-3 text-xs text-text-muted/70">No password — MVP identity only.</p>
+        <button type="button" disabled={busy} onClick={() => { setRegistering(!registering); setError(null); }}
+          className="accent-ring mt-3 self-start text-sm text-text-muted underline disabled:opacity-50">
+          {registering ? "Use an existing account" : "Create an account"}
+        </button>
       </div>
     </Shell>
   );
 }
 
-function Dashboard({ userId, onSignOut }: { userId: string; onSignOut: () => void }) {
+function Dashboard({ userId, email, onSignOut }: { userId: string; email: string; onSignOut: () => void }) {
   const router = useRouter();
   const qc = useQueryClient();
   const [query, setQuery] = useState("");
@@ -193,7 +222,7 @@ function Dashboard({ userId, onSignOut }: { userId: string; onSignOut: () => voi
       <header className="flex items-center justify-between">
         <p className="eyebrow">MindMorph</p>
         <button onClick={onSignOut} className="text-sm text-text-muted hover:text-text">
-          {userId} · sign out
+          {email} · sign out
         </button>
       </header>
 

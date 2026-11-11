@@ -28,6 +28,7 @@ export interface SkillGraph {
 }
 
 export interface NodeState {
+  knowledge_tracking?: KnowledgeTracking;
   status: NodeStatus;
   best_score: number;
   attempts: number;
@@ -36,6 +37,16 @@ export interface NodeState {
   // Deterministic-lock signal set by a sub-40 grade (mirrors services/mastery.py). Optional for
   // backward-compat with sessions persisted before the field existed.
   remediation_pending?: boolean;
+}
+
+export type PracticeMode = "foundation" | "standard" | "challenge";
+
+export interface KnowledgeTracking {
+  status: "insufficient_evidence" | "ready" | "unavailable";
+  probability: number | null;
+  observation_count: number;
+  model_version: string;
+  recommendation: { mode: PracticeMode; reason: string };
 }
 
 export interface GradingArtifact {
@@ -48,6 +59,7 @@ export interface GradingArtifact {
 }
 
 export interface Exercise {
+  practice_mode?: PracticeMode;
   id?: string;
   grounding?: GroundingInfo | null;
   revision?: string;

@@ -16,6 +16,7 @@ env:
   MINDMORPH_WEB_RESEARCH: "0"
   MINDMORPH_RERANK: "0"
   MINDMORPH_NEO4J_MIRROR: "0"
+  MINDMORPH_BKT: "0"                         # BKT-specific fixtures opt in
   KAFKA_BOOTSTRAP_SERVERS: ""
   # Explicitly bound the DB-gated collection checks on both Windows and Linux.
   DATABASE_URL: postgresql+psycopg://mindmorph:mindmorph@127.0.0.1:1/mindmorph?connect_timeout=2
@@ -67,7 +68,7 @@ jobs:
           done
           exit 1
       - run: python -m alembic upgrade head
-      - run: pytest tests/test_repository_postgres.py tests/test_rag_pgvector.py tests/test_grounding_storage.py tests/test_grading_storage.py -q
+      - run: pytest tests/test_repository_postgres.py tests/test_rag_pgvector.py tests/test_grounding_storage.py tests/test_grading_storage.py tests/test_bkt_storage.py -q
       - if: always()
         run: docker rm -f mindmorph-remaining-tests-ci
 
