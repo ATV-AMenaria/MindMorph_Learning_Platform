@@ -13,6 +13,8 @@ import { Sandbox } from "./Sandbox";
 import { EvidenceSources, citedText } from "./EvidenceSources";
 import type { LearningSession } from "@/lib/types";
 import { useDraft } from "@/lib/useDraft";
+import { PracticeRecommendation } from "./PracticeRecommendation";
+import { lockedNodeIds } from "@/lib/status";
 
 // rehype-highlight runs before these component overrides and only colorizes languages it
 // recognizes; `ignoreMissing` makes it skip the ```mermaid fence untouched (no such grammar), so
@@ -64,6 +66,7 @@ export function LessonPanel({
   const isCoding = (exercise?.format ?? "coding_challenge") === "coding_challenge";
   const exerciseLanguage = exercise?.language ?? exercise?.grading_artifact?.language ?? "python";
   const nodeState = session.node_state[nodeId];
+  const locked = lockedNodeIds(session.skill_graph, session.node_state).has(nodeId);
   // Only display grade result if the learner has actually submitted a solution attempt
   const lastFeedback = exercise?.last_result ?? ((nodeState?.attempts ?? 0) > 0 ? (nodeState?.last_feedback ?? null) : null);
   // Already flagged? Derived from the funnel timeline so it persists across reloads.
@@ -127,7 +130,8 @@ export function LessonPanel({
           </div>
           <EvidenceSources evidence={exercise.grounding ?? lesson.grounding} />
           <AssessmentNotice exercise={exercise} />
-          {onNewPractice && <button type="button" onClick={onNewPractice} disabled={preparingPractice || grading} className="accent-ring mt-3 rounded-lg border border-white/10 px-4 py-2 text-sm text-text-muted disabled:opacity-50">{preparingPractice ? "Preparing new practice…" : "New practice task"}</button>}
+          {!locked && <PracticeRecommendation tracking={nodeState?.knowledge_tracking} />}
+          {onNewPractice && <button type="button" onClick={onNewPractice} disabled={preparingPractice || grading || locked} className="accent-ring mt-3 rounded-lg border border-white/10 px-4 py-2 text-sm text-text-muted disabled:opacity-50">{preparingPractice ? "Preparing new practice…" : "New practice task"}</button>}
 
           <div className="mt-6">
             {isCoding ? (

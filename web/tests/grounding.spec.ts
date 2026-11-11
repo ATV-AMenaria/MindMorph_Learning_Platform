@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { seedUser } from "./auth-fixture";
 
 function evidence(status = "grounded") {
   return { status, passages: [
@@ -20,7 +21,7 @@ function payload() {
 }
 
 test("path, lesson and practice show honest sources with page/snippet labels on mobile", async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem("mindmorph.userId", "grounding@test.com"));
+  await seedUser(page, "grounding@test.com");
   await page.route("**/sessions/**", (route) => route.fulfill({ json: payload() }));
   await page.setViewportSize({ width: 375, height: 700 });
   await page.goto("/session/grounded");
@@ -38,7 +39,7 @@ test("path, lesson and practice show honest sources with page/snippet labels on 
 });
 
 test("limited evidence and legacy provenance remain visible without replacing saved practice", async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem("mindmorph.userId", "grounding@test.com"));
+  await seedUser(page, "grounding@test.com");
   const data = payload();
   data.learning_session.grounding = { ...evidence("unavailable"), passages: [] };
   delete (data.learning_session.lessons.joins as { grounding?: unknown }).grounding;
@@ -52,7 +53,7 @@ test("limited evidence and legacy provenance remain visible without replacing sa
 });
 
 test("streamed tutor reply retains its source metadata after history refetch", async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem("mindmorph.userId", "grounding@test.com"));
+  await seedUser(page, "grounding@test.com");
   const data = payload();
   await page.route("**/sessions/**", (route) => {
     if (route.request().url().endsWith("/chat")) {
@@ -75,7 +76,7 @@ test("streamed tutor reply retains its source metadata after history refetch", a
 });
 
 test("upload explains future generation and does not silently create or regenerate a path", async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem("mindmorph.userId", "grounding@test.com"));
+  await seedUser(page, "grounding@test.com");
   await page.route("**/sessions/**", (route) => route.fulfill({ json: [] }));
   await page.route("**/users/*/knowledge", (route) => route.fulfill({ json: { filename: "Notes.pdf", chunks: 2 } }));
   const mutations: string[] = [];

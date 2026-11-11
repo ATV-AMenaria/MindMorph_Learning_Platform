@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { seedUser } from "./auth-fixture";
 
 function learningSession() {
   return {
@@ -10,7 +11,7 @@ function learningSession() {
 }
 
 async function prepare(page: Page, mode: "normal" | "failure" | "empty" = "normal") {
-  await page.addInitScript(() => localStorage.setItem("mindmorph.userId", "recovery@test.com"));
+  await seedUser(page, "recovery@test.com");
   await page.route("**/sessions/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/sessions/followup") {

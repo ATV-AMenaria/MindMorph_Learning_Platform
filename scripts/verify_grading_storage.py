@@ -53,8 +53,8 @@ def main():
         run([sys.executable, "-m", "alembic", "upgrade", "head"], "grading-migrate-after.txt")
         check = "import os,psycopg; c=psycopg.connect(os.environ['DATABASE_URL'].replace('postgresql+psycopg','postgresql')); assert c.execute('SELECT data,revision FROM learning_sessions WHERE user_id=%s',('legacy-p28',)).fetchone()==({'lessons':{'old':{'content':'retain'}}},7)"
         run([sys.executable, "-c", check])
-        run([sys.executable, "-m", "pytest", "tests/test_grading_storage.py", "-q", "--basetemp=" + str(out / "pytest-db-tmp"), "--junitxml=" + str(out / "grading-storage.xml")], "grading-storage.txt")
-        print("PostgreSQL upgrade preservation, fresh-process replay, conflict reconciliation and lease fencing passed.")
+        run([sys.executable, "-m", "pytest", "tests/test_grading_storage.py", "tests/test_bkt_storage.py", "-q", "--basetemp=" + str(out / "pytest-db-tmp"), "--junitxml=" + str(out / "grading-storage.xml")], "grading-storage.txt")
+        print("PostgreSQL upgrade preservation, grading/BKT fresh-process replay, conflict reconciliation and lease fencing passed.")
     finally:
         try:
             if created:

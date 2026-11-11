@@ -119,6 +119,30 @@ class GradingStore:
             return [clone(row.data) for row in db.execute(select(Row).where(Row.user_id == user, Row.kind == kind)
                 .order_by(Row.record_id).limit(5000)).scalars()]
 
+    @staticmethod
+    def _knowledge_query(user, sid, node):
+        from sqlalchemy import select, Integer
+        from persistence.models import GradingRecordRow as Row
+        return select(Row).where(Row.user_id == user, Row.kind == "knowledge_observation",
+            Row.data["session_id"].astext == sid, Row.data["node_id"].astext == node
+        ).order_by(Row.data["sequence"].astext.cast(Integer), Row.record_id)
+
+    def _memory_knowledge(self, user, sid, node):
+        rows = [clone(row) for (uid, _), row in self.repo._grading_records.items()
+                if uid == user and row["kind"] == "knowledge_observation"
+                and row["session_id"] == sid and row["node_id"] == node]
+        return sorted(rows, key=lambda row: row["sequence"])
+
+    @_storage_errors
+    def knowledge_observations(self, user, sid, node):
+        """Exact tenant/session/skill scope; no general-list cap or lost history."""
+        if self.memory:
+            with self.repo._lock:
+                return self._memory_knowledge(user, sid, node)
+        from persistence.db import get_sessionmaker
+        with get_sessionmaker()() as db:
+            return [clone(row.data) for row in db.execute(self._knowledge_query(user, sid, node)).scalars()]
+
     @_storage_errors
     def claim(self, user, key, expected, replacement):
         """CAS state transition, returning whether this controller won admission."""
@@ -219,6 +243,7 @@ class GradingStore:
     @_storage_errors
     def apply_session(self, user, sid, ls, attempt_key, new_node_ids):
         """Atomically save optimistic session revision and applied marker exactly once."""
+        from services.knowledge_tracking import attempt_scope, track_attempt
         expected = getattr(ls, "revision", None)
         if self.memory:
             with self.repo._lock:
@@ -227,7 +252,12 @@ class GradingStore:
                     return False
                 if attempt.get("state") != "completed":
                     raise SessionConflictError("The assessment has not completed.")
+                node = attempt_scope(ls, sid, attempt)
+                observation = track_attempt(ls, sid, node, attempt, self._memory_knowledge(user, sid, node)) if node else None
                 self.repo.save(user, sid, ls)
+                if observation:
+                    key, data = observation
+                    self.repo._grading_records[(user, key)] = clone(data)
                 attempt.update(applied=True, new_node_ids=clone(new_node_ids))
                 return True
         from sqlalchemy import select, update, func
@@ -240,11 +270,21 @@ class GradingStore:
                 return False
             if attempt.data.get("state") != "completed":
                 raise SessionConflictError("The assessment has not completed.")
+            node = attempt_scope(ls, sid, attempt.data)
+            observation = None
+            if node:
+                history = [clone(row.data) for row in db.execute(self._knowledge_query(user, sid, node)).scalars()]
+                observation = track_attempt(ls, sid, node, attempt.data, history)
             revision = db.execute(update(Row).where(Row.user_id == user, Row.session_id == sid,
                 Row.revision == expected).values(data=dict(ls), revision=Row.revision + 1,
                 updated_at=func.now()).returning(Row.revision)).scalar_one_or_none()
             if revision is None:
                 raise SessionConflictError("Assessment saved, but progress changed. Reload to reconcile this result.")
+            # Claim the session revision before inserting evidence. Concurrent
+            # submissions to the same exercise lose the CAS, not a unique-key race.
+            if observation:
+                key, data = observation
+                db.add(GradingRecordRow(user_id=user, record_id=key, kind="knowledge_observation", data=data))
             attempt.data = clone({**attempt.data, "applied": True, "new_node_ids": new_node_ids})
             db.commit()
         if isinstance(ls, SessionSnapshot):

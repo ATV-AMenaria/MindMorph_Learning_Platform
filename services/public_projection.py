@@ -7,7 +7,7 @@ RESULT_FIELDS = {"status", "method", "score", "eligible", "mastery_eligible", "f
     "duration_ms", "calibration_verified"}
 EXERCISE_FIELDS = {"id", "revision", "format", "language", "statement", "grounding", "instructions",
     "rubric", "status", "availability", "execution_profile", "profile_revision", "evaluator_revision",
-    "last_result", "grade_result", "attempts", "history", "created_at", "title"}
+    "last_result", "grade_result", "attempts", "history", "created_at", "title", "practice_mode"}
 SESSION_FIELDS = {"session_id", "skill_graph", "skill_graph_mermaid", "summary", "review_passed",
     "review_notes", "academic_output", "market_output", "practical_output", "format_type", "grounding",
     "graph_identity", "public_query", "node_state", "lessons", "selected_node", "chat", "usage", "events",
@@ -31,6 +31,9 @@ def public_exercise(exercise):
     if not isinstance(exercise, dict):
         return None
     out = {k: deepcopy(v) for k, v in exercise.items() if k in EXERCISE_FIELDS}
+    from services.knowledge_tracking import enabled
+    if not enabled() or out.get('practice_mode') not in {'foundation', 'standard', 'challenge'}:
+        out.pop('practice_mode', None)
     for key in ("last_result", "grade_result"):
         if key in out:
             out[key] = public_result(out[key])
@@ -40,11 +43,17 @@ def public_exercise(exercise):
 
 
 def public_session(ls):
+    from services.knowledge_tracking import public_summary
     out = {k: deepcopy(v) for k, v in ls.items() if k in SESSION_FIELDS}
     out["lessons"] = {node: {k: deepcopy(v) for k, v in lesson.items()
         if k in {"content", "grounding", "usage", "timing"}} | {"exercise": public_exercise(lesson.get("exercise"))}
         for node, lesson in ls.get("lessons", {}).items()}
     for state in out.get("node_state", {}).values():
+        summary = public_summary(state.get('knowledge_tracking'))
+        if summary is None:
+            state.pop('knowledge_tracking', None)
+        else:
+            state['knowledge_tracking'] = summary
         if "last_feedback" in state:
             state["last_feedback"] = public_result(state["last_feedback"])
     assessment = ls.get("assessment")
